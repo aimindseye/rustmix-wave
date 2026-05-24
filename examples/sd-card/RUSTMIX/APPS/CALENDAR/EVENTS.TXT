@@ -1,0 +1,3 @@
+2026-05-11|Rustmix Lua Calendar|Second SD Lua app proof under Productivity.
+2026-06-01|Calendar Follow-up|Add month navigation after basic app proof.
+2026-12-31|Year Review|Review Lua app usefulness on X4.

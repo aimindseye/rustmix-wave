@@ -1,0 +1,7 @@
+# Local espflash fallback when commands are run from target-xteink-x4/.
+
+[idf]
+partition_table = "../partitions/xteink_x4_standard.bin"
+
+[flash]
+size = "16MB"

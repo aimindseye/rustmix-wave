@@ -1,0 +1,3 @@
+# IMG|front image|back image|hint
+IMG|IMG/IMG01F.X4B|IMG/IMG01B.X4B|Xteink X4
+IMG|IMG/IMG02F.X4B|IMG/IMG02B.X4B|Rustmix

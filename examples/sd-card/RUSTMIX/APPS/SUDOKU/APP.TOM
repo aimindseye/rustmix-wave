@@ -1,0 +1,7 @@
+id = "sudoku"
+name = "Sudoku"
+category = "Games"
+type = "activity"
+version = "0.2.0"
+entry = "MAIN.LUA"
+capabilities = ["display", "input", "storage"]

@@ -1,0 +1,17 @@
+# HINDU26.TXT - Hindu calendar events for Rustmix Calendar
+# Format: YYYY-MM-DD|Category|Title|Detail
+# Starter set aligned for New York/Jersey City style usage; replace with preferred panchang data if needed.
+2026-01-14|Hindu|Makara Sankranti / Pongal|Sun enters Makara
+2026-01-23|Hindu|Vasant Panchami|Magha Shukla Panchami
+2026-02-15|Hindu|Maha Shivaratri|Phalguna Krishna Chaturdashi
+2026-03-03|Hindu|Holi|Chaitra Krishna Pratipada
+2026-03-19|Hindu|Ugadi / Gudi Padwa|Chaitra Shukla Pratipada
+2026-03-26|Hindu|Rama Navami|Chaitra Shukla Navami
+2026-04-01|Hindu|Hanuman Jayanti|Chaitra Shukla Purnima
+2026-04-19|Hindu|Akshaya Tritiya|Vaishakha Shukla Tritiya
+2026-05-01|Hindu|Buddha Purnima|Vaishakha Shukla Purnima
+2026-05-25|Hindu|Ganga Dussehra|Jyeshtha Shukla Dashami
+2026-11-08|Hindu|Diwali / Lakshmi Puja|Kartika Krishna Amavasya
+2026-11-09|Hindu|Govardhan Puja|Kartika Shukla Pratipada
+2026-11-10|Hindu|Bhaiya Dooj|Kartika Shukla Dwitiya
+2026-12-19|Hindu|Gita Jayanti|Margashirsha Shukla Ekadashi

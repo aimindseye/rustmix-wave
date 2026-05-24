@@ -1,0 +1,45 @@
+[package]
+name = "target-xteink-x4"
+edition = { workspace = true }
+version = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+
+[features]
+default = []
+lua-vm = ["dep:rustmix-lua-vm"]
+lua-runtime-probe = []
+
+[dependencies]
+rustmix-lua-vm = { path = "../support/rustmix-lua-vm", optional = true, default-features = false }
+
+[target.'cfg(all(target_arch = "riscv32", target_os = "none"))'.dependencies]
+log = "0.4.27"
+esp-rtos = { version = "0.2.0", features = ["embassy", "esp32c3", "esp-radio", "log-04"] }
+embassy-executor = "0.9"
+static_cell = "2.1.1"
+esp-alloc = { version = "0.9.0", features = ["internal-heap-stats"] }
+rustmix-core = { path = "../core" }
+hal-xteink-x4 = { path = "../hal-xteink-x4" }
+nb = "1"
+smol-epub = { path = "../vendor/smol-epub", features = ["async"] }
+esp-hal = { workspace = true }
+esp-backtrace = { workspace = true }
+esp-println = { workspace = true }
+esp-bootloader-esp-idf = { workspace = true }
+embedded-hal-bus = { workspace = true }
+embedded-hal = { workspace = true }
+embedded-sdmmc = { workspace = true }
+embedded-graphics = "0.8.2"
+embassy-time = "0.5"
+embassy-futures = "0.1"
+embassy-sync = "0.7"
+embedded-hal-async = "1.0.0"
+embedded-graphics-core = "0.4.1"
+critical-section = "1.2.0"
+embassy-net = { version = "0.8", features = ["dhcpv4", "dns", "medium-ethernet", "tcp", "udp"] }
+embedded-io-async = "0.7"
+esp-radio = { version = "0.17", default-features = false, features = ["esp32c3", "wifi", "log-04", "esp-alloc"] }
+
+[build-dependencies]
+fontdue = "0.9"

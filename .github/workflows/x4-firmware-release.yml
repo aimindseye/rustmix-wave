@@ -1,0 +1,51 @@
+name: Build Rustmix X4 rustfirmware.bin
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    name: Build rustfirmware.bin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv32imc-unknown-none-elf
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install espflash
+        run: cargo install espflash --locked
+
+      - name: Repository hygiene
+        run: ./scripts/check_repo_hygiene.sh
+
+      - name: Build rustfirmware.bin
+        run: ./scripts/create_rustfirmware_bin.sh
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustmix-x4-rustfirmware
+          path: |
+            dist/rustmix-x4/rustfirmware.bin
+            dist/rustmix-x4/rustmix-x4.elf
+            dist/rustmix-x4/README-RUSTFIRMWARE.txt
+            dist/rustmix-x4/SHA256SUMS.txt
+            dist/rustmix-x4/espflash.toml
+            dist/rustmix-x4/xteink_x4_standard.csv
+            dist/rustmix-x4/xteink_x4_standard.bin
+          if-no-files-found: error

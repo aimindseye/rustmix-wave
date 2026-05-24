@@ -1,0 +1,11 @@
+[package]
+name = "prepared-txt-real-vfnt"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+fontdue = "0.9.3"
+rustybuzz = "0.13.0"
+
+[workspace]

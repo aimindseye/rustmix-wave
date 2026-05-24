@@ -1,0 +1,11 @@
+[package]
+name = "rustmix-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+heapless.workspace = true
+serde.workspace = true
+postcard.workspace = true

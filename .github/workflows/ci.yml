@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate Rustmix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv32imc-unknown-none-elf
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Repository hygiene
+        run: |
+          if [ -x scripts/check_repo_hygiene.sh ]; then
+            ./scripts/check_repo_hygiene.sh
+          fi
+
+      - name: Runtime ownership audit
+        run: |
+          if [ -x scripts/audit_remaining_pulp_runtime_dependencies.sh ]; then
+            ./scripts/audit_remaining_pulp_runtime_dependencies.sh
+          fi
+
+      - name: X4 partition policy checks
+        run: |
+          if [ -x scripts/validate_x4_standard_partition_table_compatibility.sh ]; then
+            ./scripts/validate_x4_standard_partition_table_compatibility.sh
+          fi
+          if [ -x scripts/validate_x4_flash_ota_slot_policy.sh ]; then
+            ./scripts/validate_x4_flash_ota_slot_policy.sh
+          fi
+
+      - name: Rust format
+        run: cargo fmt --all --check
+
+      - name: Check X4 target package
+        run: cargo check -p target-xteink-x4 --target riscv32imc-unknown-none-elf
+
+      - name: Build X4 release firmware
+        run: cargo build -p target-xteink-x4 --release --target riscv32imc-unknown-none-elf

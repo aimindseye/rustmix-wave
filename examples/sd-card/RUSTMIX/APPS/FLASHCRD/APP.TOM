@@ -1,0 +1,15 @@
+id = "FLASHCRD"
+name = "Flashcards"
+version = "0.2.0"
+category = "Productivity"
+entry = "MAIN.LUA"
+summary = "SD-driven image flashcards with topic folders"
+
+[display]
+title = "Flashcards"
+
+[data]
+topic_root = "TOPICS"
+topic_index = "TOPICS/INDEX.TXT"
+card_file = "CARDS.TXT"
+image_format = "X4B1"

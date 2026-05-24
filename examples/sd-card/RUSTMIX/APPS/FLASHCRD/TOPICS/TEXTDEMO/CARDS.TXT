@@ -1,0 +1,4 @@
+# question|answer|hint
+What is Rustmix?|Reference Rust firmware for Xteink X4.|Project name
+What folder stores app data?|/RUSTMIX/APPS|SD root folder
+How do you add topics?|Create a TOPICS folder and edit INDEX.TXT.|Use Wi-Fi Transfer

@@ -1,0 +1,11 @@
+[package]
+name = "hal-xteink-x4"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+rustmix-core = { path = "../core" }
+heapless.workspace = true
+embedded-hal.workspace = true

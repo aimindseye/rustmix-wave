@@ -1,0 +1,395 @@
+// bookmark cache: 16 slots, RAM-resident, flushed to SD on dirty
+//
+// record layout (little-endian, 48 bytes per slot):
+//   [0..4)   name_hash  u32    [8..10)  chapter    u16
+//   [4..8)   byte_offset u32   [10..12) flags      u16 (bit 0 = valid)
+//   [12..14) generation u16    [14] name_len u8  [15] pad
+//   [16..48) filename [u8;32]
+
+use crate::rustmix_x4::x4_kernel::drivers::sdcard::SdStorage;
+use crate::rustmix_x4::x4_kernel::drivers::storage::{self, TITLE_CAP};
+// FNV-1a hash with ASCII case folding, used for bookmark filename lookups.
+pub fn fnv1a_icase(data: &[u8]) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for &b in data {
+        h ^= b.to_ascii_lowercase() as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
+// little-endian helpers for binary record encoding
+#[inline]
+fn read_u16_le(buf: &[u8], off: usize) -> u16 {
+    u16::from_le_bytes([buf[off], buf[off + 1]])
+}
+
+#[inline]
+fn read_u32_le(buf: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
+}
+
+#[inline]
+fn write_u16_le(buf: &mut [u8], off: usize, val: u16) {
+    buf[off..off + 2].copy_from_slice(&val.to_le_bytes());
+}
+
+#[inline]
+fn write_u32_le(buf: &mut [u8], off: usize, val: u32) {
+    buf[off..off + 4].copy_from_slice(&val.to_le_bytes());
+}
+
+pub const BOOKMARK_FILE: &str = "BKMK.BIN";
+pub const SLOTS: usize = 16;
+pub const RECORD_LEN: usize = 48;
+pub const FILE_LEN: usize = SLOTS * RECORD_LEN; // 768B
+pub const FILENAME_CAP: usize = 32;
+
+#[derive(Clone, Copy)]
+pub struct BookmarkSlot {
+    pub name_hash: u32,
+    pub byte_offset: u32,
+    pub chapter: u16,
+    pub valid: bool,
+    pub generation: u16,
+    pub name_len: u8,
+    pub filename: [u8; FILENAME_CAP],
+}
+
+impl BookmarkSlot {
+    pub const EMPTY: Self = Self {
+        name_hash: 0,
+        byte_offset: 0,
+        chapter: 0,
+        valid: false,
+        generation: 0,
+        name_len: 0,
+        filename: [0u8; FILENAME_CAP],
+    };
+
+    pub fn filename_str(&self) -> &str {
+        core::str::from_utf8(&self.filename[..self.name_len as usize]).unwrap_or("?")
+    }
+
+    fn decode(rec: &[u8]) -> Self {
+        if rec.len() < RECORD_LEN {
+            return Self::EMPTY;
+        }
+        let name_len = rec[14].min(FILENAME_CAP as u8);
+        let mut filename = [0u8; FILENAME_CAP];
+        filename[..name_len as usize].copy_from_slice(&rec[16..16 + name_len as usize]);
+
+        Self {
+            name_hash: read_u32_le(rec, 0),
+            byte_offset: read_u32_le(rec, 4),
+            chapter: read_u16_le(rec, 8),
+            valid: read_u16_le(rec, 10) & 1 != 0,
+            generation: read_u16_le(rec, 12),
+            name_len,
+            filename,
+        }
+    }
+
+    fn encode(&self) -> [u8; RECORD_LEN] {
+        let mut rec = [0u8; RECORD_LEN];
+        write_u32_le(&mut rec, 0, self.name_hash);
+        write_u32_le(&mut rec, 4, self.byte_offset);
+        write_u16_le(&mut rec, 8, self.chapter);
+        write_u16_le(&mut rec, 10, if self.valid { 1 } else { 0 });
+        write_u16_le(&mut rec, 12, self.generation);
+        rec[14] = self.name_len;
+        rec[16..16 + self.name_len as usize]
+            .copy_from_slice(&self.filename[..self.name_len as usize]);
+        rec
+    }
+
+    fn matches_name(&self, name: &[u8]) -> bool {
+        self.name_len as usize == name.len()
+            && self.filename[..self.name_len as usize].eq_ignore_ascii_case(name)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct BmListEntry {
+    pub filename: [u8; FILENAME_CAP],
+    pub name_len: u8,
+    pub chapter: u16,
+    pub title: [u8; TITLE_CAP],
+    pub title_len: u8,
+}
+
+impl BmListEntry {
+    pub const EMPTY: Self = Self {
+        filename: [0u8; FILENAME_CAP],
+        name_len: 0,
+        chapter: 0,
+        title: [0u8; TITLE_CAP],
+        title_len: 0,
+    };
+
+    pub fn filename_str(&self) -> &str {
+        core::str::from_utf8(&self.filename[..self.name_len as usize]).unwrap_or("?")
+    }
+
+    pub fn display_name(&self) -> &str {
+        if self.title_len > 0 {
+            core::str::from_utf8(&self.title[..self.title_len as usize])
+                .unwrap_or(self.filename_str())
+        } else {
+            self.filename_str()
+        }
+    }
+
+    pub fn set_title(&mut self, s: &[u8]) {
+        let n = s.len().min(TITLE_CAP);
+        self.title[..n].copy_from_slice(&s[..n]);
+        self.title_len = n as u8;
+    }
+}
+
+// 16-slot LRU bookmark cache; flushed to _x4/BKMK.BIN periodically
+pub struct BookmarkCache {
+    slots: [BookmarkSlot; SLOTS],
+    count: usize, // slots present in file; new saves past this extend count
+    dirty: bool,
+    loaded: bool,
+}
+
+impl Default for BookmarkCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BookmarkCache {
+    pub const fn new() -> Self {
+        Self {
+            slots: [BookmarkSlot::EMPTY; SLOTS],
+            count: 0,
+            dirty: false,
+            loaded: false,
+        }
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.loaded
+    }
+
+    pub fn ensure_loaded(&mut self, sd: &SdStorage) {
+        if self.loaded {
+            return;
+        }
+        self.force_load(sd);
+    }
+
+    pub fn force_load(&mut self, sd: &SdStorage) {
+        let mut buf = [0u8; FILE_LEN];
+        let slot_count =
+            match storage::read_file_start_in_dir(sd, storage::X4_DIR, BOOKMARK_FILE, &mut buf) {
+                Ok((_, n)) => (n / RECORD_LEN).min(SLOTS),
+                Err(_) => 0,
+            };
+
+        for i in 0..slot_count {
+            let base = i * RECORD_LEN;
+            self.slots[i] = BookmarkSlot::decode(&buf[base..base + RECORD_LEN]);
+        }
+        for i in slot_count..SLOTS {
+            self.slots[i] = BookmarkSlot::EMPTY;
+        }
+
+        self.count = slot_count;
+        self.dirty = false;
+        self.loaded = true;
+
+        log::info!("bookmarks: loaded {} slots from SD", slot_count);
+    }
+
+    pub fn find(&self, filename: &[u8]) -> Option<BookmarkSlot> {
+        if !self.loaded {
+            return None;
+        }
+
+        let key = fnv1a_icase(filename);
+        for i in 0..self.count {
+            let slot = &self.slots[i];
+            if slot.valid && slot.name_hash == key && slot.matches_name(filename) {
+                return Some(*slot);
+            }
+        }
+        None
+    }
+
+    pub fn load_all(&self, out: &mut [BmListEntry]) -> usize {
+        if !self.loaded {
+            return 0;
+        }
+
+        let mut gens = [0u16; SLOTS];
+        let mut count = 0usize;
+
+        for i in 0..self.count {
+            if count >= out.len() {
+                break;
+            }
+            let slot = &self.slots[i];
+            if slot.valid && slot.name_len > 0 {
+                gens[count] = slot.generation;
+                out[count] = BmListEntry {
+                    filename: slot.filename,
+                    name_len: slot.name_len,
+                    chapter: slot.chapter,
+                    title: [0u8; TITLE_CAP],
+                    title_len: 0,
+                };
+                count += 1;
+            }
+        }
+
+        for i in 1..count {
+            let key_gen = gens[i];
+            let key_entry = out[i];
+            let mut j = i;
+            while j > 0 && gens[j - 1] < key_gen {
+                gens[j] = gens[j - 1];
+                out[j] = out[j - 1];
+                j -= 1;
+            }
+            gens[j] = key_gen;
+            out[j] = key_entry;
+        }
+
+        count
+    }
+
+    pub fn save(&mut self, filename: &[u8], byte_offset: u32, chapter: u16) {
+        if !self.loaded {
+            log::warn!("bookmarks: save called before load, ignoring");
+            return;
+        }
+
+        let key = fnv1a_icase(filename);
+
+        let mut max_gen: u16 = 0;
+        let mut target: Option<usize> = None;
+        let mut first_free: Option<usize> = None;
+        let mut lru_slot: Option<usize> = None;
+        let mut lru_gen: u16 = u16::MAX;
+
+        for i in 0..self.count {
+            let slot = &self.slots[i];
+
+            if !slot.valid {
+                if first_free.is_none() {
+                    first_free = Some(i);
+                }
+                continue;
+            }
+
+            if slot.generation > max_gen {
+                max_gen = slot.generation;
+            }
+            if slot.generation < lru_gen {
+                lru_gen = slot.generation;
+                lru_slot = Some(i);
+            }
+
+            if slot.name_hash == key && slot.matches_name(filename) {
+                target = Some(i);
+                break;
+            }
+        }
+
+        let write_slot = target.or(first_free).unwrap_or_else(|| {
+            if self.count >= SLOTS {
+                // evict the least-recently-used valid slot. if no valid
+                // LRU candidate was found (every slot was invalid), they
+                // would all have been captured by first_free above, so
+                // this path is unreachable; fall back to 0 as a safe
+                // default rather than panicking
+                lru_slot.unwrap_or(0)
+            } else {
+                self.count
+            }
+        });
+
+        let generation = max_gen.wrapping_add(1);
+        let name_len = filename.len().min(FILENAME_CAP);
+
+        let mut new_slot = BookmarkSlot {
+            name_hash: key,
+            byte_offset,
+            chapter,
+            valid: true,
+            generation,
+            name_len: name_len as u8,
+            filename: [0u8; FILENAME_CAP],
+        };
+        new_slot.filename[..name_len].copy_from_slice(&filename[..name_len]);
+
+        self.slots[write_slot] = new_slot;
+
+        if write_slot >= self.count {
+            self.count = write_slot + 1;
+        }
+        debug_assert!(self.count <= SLOTS, "bookmark count exceeds slot limit");
+
+        self.dirty = true;
+
+        log::info!(
+            "bookmark: cached off={} ch={} gen={} for {:?}",
+            byte_offset,
+            chapter,
+            generation,
+            core::str::from_utf8(filename).unwrap_or("?"),
+        );
+    }
+
+    pub fn remove(&mut self, filename: &[u8]) {
+        if !self.loaded {
+            return;
+        }
+        let key = fnv1a_icase(filename);
+        for i in 0..self.count {
+            let slot = &mut self.slots[i];
+            if slot.valid && slot.name_hash == key && slot.matches_name(filename) {
+                slot.valid = false;
+                self.dirty = true;
+                log::info!(
+                    "bookmark: removed {:?}",
+                    core::str::from_utf8(filename).unwrap_or("?")
+                );
+                return;
+            }
+        }
+    }
+
+    pub fn flush(&mut self, sd: &SdStorage) {
+        if !self.dirty || !self.loaded {
+            return;
+        }
+
+        let file_len = self.count * RECORD_LEN;
+        let mut buf = [0u8; FILE_LEN];
+
+        for i in 0..self.count {
+            let base = i * RECORD_LEN;
+            let rec = self.slots[i].encode();
+            buf[base..base + RECORD_LEN].copy_from_slice(&rec);
+        }
+
+        match storage::write_file_in_dir(sd, storage::X4_DIR, BOOKMARK_FILE, &buf[..file_len]) {
+            Ok(_) => {
+                self.dirty = false;
+                log::info!("bookmarks: flushed {} slots to SD", self.count);
+            }
+            Err(e) => {
+                log::warn!("bookmarks: flush failed: {}", e);
+            }
+        }
+    }
+}

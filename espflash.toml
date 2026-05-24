@@ -1,0 +1,9 @@
+# Rustmix Xteink X4 flashing configuration.
+# Keep this file at repository root so `cargo run` and direct `espflash flash`
+# pick up the Xteink X4 / CrossPoint-compatible partition table.
+
+[idf]
+partition_table = "partitions/xteink_x4_standard.bin"
+
+[flash]
+size = "16MB"
