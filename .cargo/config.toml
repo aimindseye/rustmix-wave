@@ -1,24 +1,16 @@
-# Rustmix Cargo configuration.
+# Rustmix-Wave ESP-IDF build configuration.
 #
-# Keep the default cargo target as the host platform so workspace checks/tests
-# continue to use std + libtest:
-#
-#   cargo check --workspace --all-targets
-#   cargo test --workspace --all-targets
-#   cargo clippy --workspace --all-targets -- -D warnings
-#
-# Build or flash the X4 firmware only when the embedded target is passed
-# explicitly:
-#
-#   cargo build -p target-xteink-x4 --release --target riscv32imc-unknown-none-elf
-#   cargo run   -p target-xteink-x4 --release --target riscv32imc-unknown-none-elf
-#
-# Do not set [build].target here. If it is set globally, cargo will try to run
-# host unit tests against riscv32imc-unknown-none-elf, where std/libtest do not
-# exist, causing `can't find crate for test` errors.
+# xtensa-esp32s3-espidf does not use prebuilt core/std from rustup.
+# The ESP toolchain builds std/core from source for this target.
+[build]
+target = "xtensa-esp32s3-espidf"
 
-[target.riscv32imc-unknown-none-elf]
-runner = "espflash flash --monitor --chip esp32c3"
-rustflags = [
-  "-C", "force-frame-pointers",
-]
+[target.xtensa-esp32s3-espidf]
+linker = "ldproxy"
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32s3"

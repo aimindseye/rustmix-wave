@@ -143,3 +143,28 @@ The first real hardware slice after this bootstrap should import the accepted
 Waveshare 3.97 display backend. This bootstrap intentionally does not port
 display code and does not delete the existing X4 code.
 <!-- END RUSTMIX_WAVE_REPOSITORY_BOOTSTRAP_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_DISPLAY_BACKEND_IMPORT_V0 -->
+## Rustmix-Wave Display Backend Import v0
+
+Rustmix-Wave now includes a Waveshare ESP32-S3 e-Paper 3.97 display backend
+imported into `hal-waveshare-epd397`.
+
+Accepted display pin map:
+
+- EPD_SCLK GPIO11
+- EPD_MOSI GPIO12
+- EPD_CS GPIO10
+- EPD_DC GPIO9
+- EPD_RST GPIO46
+- EPD_BUSY GPIO3
+
+This slice adds:
+
+- Free-function Waveshare display backend.
+- `DisplayBackendAdapter`.
+- `ShellDisplayBridge`.
+- Minimal `target-waveshare-epd397` black/white display smoke.
+
+This slice intentionally does not port the reader yet.
+<!-- END RUSTMIX_WAVE_DISPLAY_BACKEND_IMPORT_V0 -->

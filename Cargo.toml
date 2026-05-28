@@ -4,6 +4,8 @@ members = [
     "hal-xteink-x4",
     "target-xteink-x4",
     "support/rustmix-lua-vm",
+    "hal-waveshare-epd397",
+    "target-waveshare-epd397",
 ]
 resolver = "2"
 
@@ -34,3 +36,10 @@ esp-bootloader-esp-idf = { version = "=0.4.0", features = ["esp32c3", "log-04"] 
 
 nb = "1.1.0"
 
+[profile.release]
+opt-level = "s"
+lto = true
+
+[profile.dev]
+debug = true
+opt-level = "z"

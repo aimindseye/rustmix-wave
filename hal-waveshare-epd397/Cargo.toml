@@ -1,0 +1,15 @@
+[package]
+name = "hal-waveshare-epd397"
+version = "0.1.0"
+edition = "2021"
+description = "Waveshare ESP32-S3 e-Paper 3.97 hardware support for Rustmix-Wave"
+
+[lib]
+name = "hal_waveshare_epd397"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { version = "1.0", default-features = false, features = ["std"] }
+embedded-graphics = "0.8"
+esp-idf-hal = "0.46"
+esp-idf-sys = { version = "0.37", features = ["binstart"] }
