@@ -330,3 +330,42 @@ This slice adds:
 This is still simple byte-stride pagination. EPUB, bookmarks/progress
 persistence, and layout-aware pagination remain out of scope.
 <!-- END RUSTMIX_WAVE_REAL_TXT_PAGINATION_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_TXT_BOOK_BROWSER_V0 -->
+## Rustmix-Wave TXT Book Browser v0
+
+Rustmix-Wave now boots into a TXT book browser instead of opening the first TXT
+file immediately.
+
+This slice adds:
+
+- scan of `/sdcard/BOOKS/*.txt`
+- small in-memory book list
+- browser screen through `ReaderDisplaySurface`
+- GPIO6 Down selection movement
+- GPIO4 Up selection movement
+- GPIO5 Function opens selected TXT
+
+After a book opens, the existing reader navigation remains active. EPUB,
+bookmark persistence, and progress persistence remain out of scope.
+<!-- END RUSTMIX_WAVE_TXT_BOOK_BROWSER_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_X4_READER_REUSE_MAP_V0 -->
+## Rustmix-Wave X4 Reader Reuse Map v0
+
+Rustmix-Wave now has a documented reuse map for existing Rustmix X4 reader/UI
+code.
+
+The rule is:
+
+Reuse reader/UI/product logic. Do not reuse X4 hardware ownership.
+
+The map classifies X4 reader/UI files into:
+
+- reuse as-is
+- reuse with adapter
+- copy concepts only
+- do not reuse
+
+This slice is docs and validation only. It does not change runtime behavior.
+<!-- END RUSTMIX_WAVE_X4_READER_REUSE_MAP_V0 -->
