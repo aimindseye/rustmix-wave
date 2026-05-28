@@ -226,3 +226,26 @@ This slice intentionally does not port reader parsing, SD/storage, bookmarks,
 progress, EPUB/TXT loading, or real rotary input. GPIO3 remains reserved for
 EPD_BUSY.
 <!-- END RUSTMIX_WAVE_READER_DISPLAY_SURFACE_BOUNDARY_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_READER_FOUNDATION_V0 -->
+## Rustmix-Wave Reader Foundation v0
+
+Rustmix-Wave now has a mock reader foundation on top of the accepted display
+stack:
+
+`MockReaderStorage -> ReaderStorage -> ReaderDisplaySurface -> ShellDisplayBridge -> DisplayBackendAdapter`
+
+This slice adds:
+
+- `ReaderStorage` trait.
+- `MockReaderStorage`.
+- `ReaderBook`.
+- `ReaderScreenState`.
+- wrapped mock text page renderer.
+- title/header, body text, footer/progress bar, and page number.
+- simulated reader flow: first page, next page, previous page.
+
+This slice intentionally does not enable real rotary input, real SD reading,
+bookmarks/progress persistence, EPUB, or the full Rustmix X4 reader manager.
+GPIO3 remains reserved for EPD_BUSY.
+<!-- END RUSTMIX_WAVE_READER_FOUNDATION_V0 -->
