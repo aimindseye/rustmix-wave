@@ -12,6 +12,7 @@ use hal_waveshare_epd397::{
     display::{DisplayBackendAdapter, ShellDisplayBridge},
     raw_marker,
     ui::render_rustmix_wave_home_navigation_smoke,
+    reader_display::render_reader_display_surface_placeholder_v0,
 };
 
 fn main() {
@@ -89,6 +90,11 @@ fn try_main() -> anyhow::Result<()> {
         .context("Rustmix-Wave shell UI navigation smoke failed")?;
 
     raw_marker(b"RAW-RUSTMIX-WAVE-SHELL-UI-SMOKE-OK\n\0");
+
+    raw_marker(b"RAW-RUSTMIX-WAVE-READER-BOUNDARY-DEMO-START\n\0");
+    render_reader_display_surface_placeholder_v0(&mut shell_display)
+        .context("Rustmix-Wave reader display surface placeholder failed")?;
+    raw_marker(b"RAW-RUSTMIX-WAVE-READER-BOUNDARY-DEMO-OK\n\0");
 
     loop {
         esp_idf_hal::delay::FreeRtos::delay_ms(1000);

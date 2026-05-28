@@ -207,3 +207,22 @@ This slice adds:
 This slice intentionally does not port reader code, does not enable real rotary
 input, and does not use GPIO3 for input. GPIO3 remains reserved for EPD_BUSY.
 <!-- END RUSTMIX_WAVE_READER_PORT_RECON_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_READER_DISPLAY_SURFACE_BOUNDARY_V0 -->
+## Rustmix-Wave Reader Display Surface Boundary v0
+
+Rustmix-Wave now has a reader-facing display boundary:
+
+`ReaderDisplaySurface -> ShellDisplayBridge -> DisplayBackendAdapter`
+
+This slice adds:
+
+- `ReaderDisplaySurface` trait.
+- `ShellDisplayBridge` implementation.
+- Static reader placeholder page rendered through the boundary.
+- Explicit reader boundary smoke markers.
+
+This slice intentionally does not port reader parsing, SD/storage, bookmarks,
+progress, EPUB/TXT loading, or real rotary input. GPIO3 remains reserved for
+EPD_BUSY.
+<!-- END RUSTMIX_WAVE_READER_DISPLAY_SURFACE_BOUNDARY_V0 -->

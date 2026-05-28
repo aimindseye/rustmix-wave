@@ -790,3 +790,228 @@ pub mod ui {
     }
 }
 // END RUSTMIX_WAVE_SHELL_BRIDGE_UI_IMPORT_V0
+
+// BEGIN RUSTMIX_WAVE_READER_DISPLAY_SURFACE_BOUNDARY_V0
+pub mod reader_display {
+    use anyhow::Result;
+    use embedded_graphics::pixelcolor::BinaryColor;
+
+    use crate::{display::ShellDisplayBridge, raw_marker};
+
+    /// Reader-facing display surface.
+    ///
+    /// Reader code must target this trait instead of directly owning SPI pins,
+    /// DisplayBackendAdapter, or native display RAM orientation.
+    pub trait ReaderDisplaySurface {
+        fn logical_width(&self) -> u32;
+        fn logical_height(&self) -> u32;
+        fn clear(&mut self);
+        fn fill_rect(&mut self, x: u32, y: u32, w: u32, h: u32, black: bool);
+        fn draw_mono_bitmap(&mut self, x: u32, y: u32, w: u32, h: u32, data: &[u8]);
+        fn flush(&mut self) -> Result<()>;
+    }
+
+    impl<'d> ReaderDisplaySurface for ShellDisplayBridge<'d> {
+        fn logical_width(&self) -> u32 {
+            480
+        }
+
+        fn logical_height(&self) -> u32 {
+            800
+        }
+
+        fn clear(&mut self) {
+            ShellDisplayBridge::clear_fb(self, BinaryColor::Off);
+        }
+
+        fn fill_rect(&mut self, x: u32, y: u32, w: u32, h: u32, black: bool) {
+            let color = if black {
+                BinaryColor::On
+            } else {
+                BinaryColor::Off
+            };
+
+            ShellDisplayBridge::fill_rect(self, x, y, w, h, color);
+        }
+
+        fn draw_mono_bitmap(&mut self, x: u32, y: u32, w: u32, h: u32, data: &[u8]) {
+            let bytes_per_row = ((w as usize) + 7) / 8;
+
+            let mut yy = 0u32;
+            while yy < h {
+                let mut xx = 0u32;
+                while xx < w {
+                    let byte_idx = yy as usize * bytes_per_row + xx as usize / 8;
+                    if byte_idx >= data.len() {
+                        return;
+                    }
+
+                    let mask = 1u8 << (7 - (xx % 8));
+                    if (data[byte_idx] & mask) != 0 {
+                        ShellDisplayBridge::set_pixel(self, x + xx, y + yy, BinaryColor::On);
+                    }
+
+                    xx += 1;
+                }
+
+                yy += 1;
+            }
+        }
+
+        fn flush(&mut self) -> Result<()> {
+            ShellDisplayBridge::flush(self)
+        }
+    }
+
+    fn glyph_5x7(ch: char) -> [u8; 7] {
+        match ch {
+            'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+            'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+            'C' => [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111],
+            'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+            'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+            'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+            'G' => [0b01111, 0b10000, 0b10000, 0b10011, 0b10001, 0b10001, 0b01111],
+            'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+            'I' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111],
+            'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100],
+            'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+            'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+            'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+            'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
+            'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+            'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
+            'Q' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+            'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+            'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+            'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+            'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+            'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+            'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010],
+            'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+            'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+            'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+            '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+            '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+            '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
+            '3' => [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
+            '4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+            '5' => [0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110],
+            '6' => [0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+            '7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+            '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+            '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110],
+            ':' => [0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000],
+            '-' => [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
+            '/' => [0b00001, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b10000],
+            ' ' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000],
+            _ => [0b11111, 0b10001, 0b00110, 0b00100, 0b00110, 0b10001, 0b11111],
+        }
+    }
+
+    fn draw_char<D: ReaderDisplaySurface>(
+        display: &mut D,
+        x: u32,
+        y: u32,
+        scale: u32,
+        ch: char,
+        black: bool,
+    ) {
+        let glyph = glyph_5x7(ch);
+
+        for (row, bits) in glyph.iter().enumerate() {
+            for col in 0..5u32 {
+                if (*bits & (1u8 << (4 - col))) != 0 {
+                    display.fill_rect(
+                        x + col * scale,
+                        y + row as u32 * scale,
+                        scale,
+                        scale,
+                        black,
+                    );
+                }
+            }
+        }
+    }
+
+    fn draw_text<D: ReaderDisplaySurface>(
+        display: &mut D,
+        mut x: u32,
+        y: u32,
+        scale: u32,
+        text: &str,
+        black: bool,
+    ) {
+        for ch in text.chars() {
+            draw_char(display, x, y, scale, ch, black);
+            x = x.saturating_add(6 * scale);
+        }
+    }
+
+    pub fn render_reader_display_surface_placeholder_v0<D>(
+        display: &mut D,
+    ) -> Result<()>
+    where
+        D: ReaderDisplaySurface,
+    {
+        raw_marker(b"RAW-RUSTMIX-WAVE-READER-BOUNDARY-V0-START\n\0");
+
+        let width = display.logical_width();
+        let height = display.logical_height();
+
+        display.clear();
+
+        // Header.
+        display.fill_rect(0, 0, width, 64, true);
+        draw_text(display, 20, 18, 3, "READER BOUNDARY", false);
+
+        // Static reader page placeholder.
+        display.fill_rect(38, 88, width.saturating_sub(76), height.saturating_sub(176), false);
+        display.fill_rect(38, 88, width.saturating_sub(76), 3, true);
+        display.fill_rect(38, height.saturating_sub(91), width.saturating_sub(76), 3, true);
+        display.fill_rect(38, 88, 3, height.saturating_sub(176), true);
+        display.fill_rect(width.saturating_sub(41), 88, 3, height.saturating_sub(176), true);
+
+        // Small 16x16 marker rendered through draw_mono_bitmap.
+        const BOOK_ICON: [u8; 32] = [
+            0b11111111, 0b11111110,
+            0b10000000, 0b00000110,
+            0b10111111, 0b11110110,
+            0b10100000, 0b00010110,
+            0b10101111, 0b11010110,
+            0b10101000, 0b01010110,
+            0b10101011, 0b01010110,
+            0b10101010, 0b01010110,
+            0b10101010, 0b01010110,
+            0b10101011, 0b01010110,
+            0b10101000, 0b01010110,
+            0b10101111, 0b11010110,
+            0b10100000, 0b00010110,
+            0b10111111, 0b11110110,
+            0b10000000, 0b00000110,
+            0b11111111, 0b11111110,
+        ];
+        display.draw_mono_bitmap(60, 114, 16, 16, &BOOK_ICON);
+
+        draw_text(display, 92, 112, 3, "DISPLAY SURFACE", true);
+        draw_text(display, 60, 170, 3, "STATIC PAGE ONLY", true);
+        draw_text(display, 60, 226, 2, "NO STORAGE YET", true);
+        draw_text(display, 60, 256, 2, "NO READER PORT YET", true);
+        draw_text(display, 60, 286, 2, "NO REAL INPUT YET", true);
+        draw_text(display, 60, 316, 2, "GPIO3 EPD BUSY", true);
+        draw_text(display, 60, 376, 2, "SURFACE FLUSH VIA SHELL BRIDGE", true);
+        draw_text(display, 60, 406, 2, "FULL REFRESH ONLY", true);
+
+        // Footer.
+        display.fill_rect(0, height.saturating_sub(58), width, 58, true);
+        draw_text(display, 22, height.saturating_sub(38), 2, "READERDISPLAY -> SHELLDISPLAY", false);
+
+        display.flush()?;
+
+        raw_marker(b"RAW-RUSTMIX-WAVE-READER-DISPLAY-PLACEHOLDER-OK\n\0");
+        raw_marker(b"RAW-RUSTMIX-WAVE-READER-BOUNDARY-V0-OK\n\0");
+
+        Ok(())
+    }
+}
+// END RUSTMIX_WAVE_READER_DISPLAY_SURFACE_BOUNDARY_V0
