@@ -116,3 +116,30 @@ Rustmix is inspired by or informed by:
 - Lua-reader experiments such as CrossLuaReader-style SD apps, bounded host APIs, and data-driven app folders.
 
 Rustmix is not official Xteink firmware. Flashing custom firmware can fail on unsupported devices. Keep recovery options available.
+
+<!-- BEGIN RUSTMIX_WAVE_REPOSITORY_BOOTSTRAP_V0 -->
+## Rustmix-Wave
+
+Rustmix-Wave is the Waveshare ESP32-S3 e-Paper 3.97 version of Rustmix.
+
+This repository keeps the Rustmix X4 code as the upstream reference while adding
+a new Waveshare target direction.
+
+Repository Bootstrap v0 adds:
+
+- `hal-waveshare-epd397/` skeleton.
+- `target-waveshare-epd397/` skeleton.
+- Rustmix-Wave architecture docs.
+- Validation script for repository bootstrap.
+
+Product direction:
+
+- Reuse the Rustmix product model and reader/app logic where possible.
+- Use the accepted Focus Hub Waveshare display/backend work as the hardware display source.
+- Build a rotary-first UI for a non-touch e-paper device.
+- Add a future voice assistant layer inspired by the Focus Hub / Durobo direction.
+
+The first real hardware slice after this bootstrap should import the accepted
+Waveshare 3.97 display backend. This bootstrap intentionally does not port
+display code and does not delete the existing X4 code.
+<!-- END RUSTMIX_WAVE_REPOSITORY_BOOTSTRAP_V0 -->
