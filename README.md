@@ -188,3 +188,22 @@ This slice adds:
 This slice intentionally does not enable real rotary input and does not port the
 reader yet. GPIO3 remains reserved for EPD_BUSY.
 <!-- END RUSTMIX_WAVE_SHELL_BRIDGE_UI_IMPORT_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_READER_PORT_RECON_V0 -->
+## Rustmix-Wave Reader Port Recon v0
+
+Reader migration is currently in reconnaissance only.
+
+This slice adds:
+
+- Static audit script for Rustmix X4 reader/content/storage candidates.
+- Reader port recon document.
+- Reusable reader/core module categories.
+- X4-only hardware/display/input assumptions to isolate.
+- Proposed `ReaderDisplaySurface` adapter path to `ShellDisplayBridge`.
+- Proposed `ReaderStorage` compatibility path.
+- Concrete staged port plan before any reader code moves.
+
+This slice intentionally does not port reader code, does not enable real rotary
+input, and does not use GPIO3 for input. GPIO3 remains reserved for EPD_BUSY.
+<!-- END RUSTMIX_WAVE_READER_PORT_RECON_V0 -->
