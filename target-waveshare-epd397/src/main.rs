@@ -7,7 +7,12 @@ use esp_idf_hal::{
     units::Hertz,
 };
 
-use hal_waveshare_epd397::{board, display::DisplayBackendAdapter, raw_marker};
+use hal_waveshare_epd397::{
+    board,
+    display::{DisplayBackendAdapter, ShellDisplayBridge},
+    raw_marker,
+    ui::render_rustmix_wave_home_navigation_smoke,
+};
 
 fn main() {
     esp_idf_sys::link_patches();
@@ -70,28 +75,20 @@ fn try_main() -> anyhow::Result<()> {
         board::EPD_BUSY
     );
 
-    raw_marker(b"RAW-RUSTMIX-WAVE-DISPLAY-SMOKE-START\n\0");
+    raw_marker(b"RAW-RUSTMIX-WAVE-SHELL-UI-SMOKE-START\n\0");
 
-    let mut display = DisplayBackendAdapter::new(spi, dc, rst, busy);
+    let backend = DisplayBackendAdapter::new(spi, dc, rst, busy);
+    let mut shell_display = ShellDisplayBridge::new(backend);
 
-    display.init().context("display backend init failed")?;
-    raw_marker(b"RAW-RUSTMIX-WAVE-DISPLAY-SMOKE-INIT-OK\n\0");
+    shell_display
+        .init()
+        .context("Rustmix-Wave shell display init failed")?;
+    raw_marker(b"RAW-RUSTMIX-WAVE-SHELL-UI-INIT-OK\n\0");
 
-    display
-        .clear(BinaryColor::On)
-        .context("display black clear failed")?;
-    display.refresh().context("display black refresh failed")?;
-    raw_marker(b"RAW-RUSTMIX-WAVE-DISPLAY-SMOKE-BLACK-OK\n\0");
+    render_rustmix_wave_home_navigation_smoke(&mut shell_display)
+        .context("Rustmix-Wave shell UI navigation smoke failed")?;
 
-    esp_idf_hal::delay::FreeRtos::delay_ms(2000);
-
-    display
-        .clear(BinaryColor::Off)
-        .context("display white clear failed")?;
-    display.refresh().context("display white refresh failed")?;
-    raw_marker(b"RAW-RUSTMIX-WAVE-DISPLAY-SMOKE-WHITE-OK\n\0");
-
-    raw_marker(b"RAW-RUSTMIX-WAVE-DISPLAY-SMOKE-OK\n\0");
+    raw_marker(b"RAW-RUSTMIX-WAVE-SHELL-UI-SMOKE-OK\n\0");
 
     loop {
         esp_idf_hal::delay::FreeRtos::delay_ms(1000);

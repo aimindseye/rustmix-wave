@@ -168,3 +168,23 @@ This slice adds:
 
 This slice intentionally does not port the reader yet.
 <!-- END RUSTMIX_WAVE_DISPLAY_BACKEND_IMPORT_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_SHELL_BRIDGE_UI_IMPORT_V0 -->
+## Rustmix-Wave Shell Bridge UI Import v0
+
+Rustmix-Wave now renders a rotary-first home dashboard through the accepted
+Waveshare display path:
+
+`DisplayBackendAdapter -> ShellDisplayBridge -> Rustmix-Wave home UI`
+
+This slice adds:
+
+- Portrait 480x800 shell UI rendering.
+- Rotary-first vertical home menu.
+- Selected row highlight.
+- Detail panel and voice/status line.
+- Simulated navigation only.
+
+This slice intentionally does not enable real rotary input and does not port the
+reader yet. GPIO3 remains reserved for EPD_BUSY.
+<!-- END RUSTMIX_WAVE_SHELL_BRIDGE_UI_IMPORT_V0 -->
