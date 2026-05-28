@@ -249,3 +249,47 @@ This slice intentionally does not enable real rotary input, real SD reading,
 bookmarks/progress persistence, EPUB, or the full Rustmix X4 reader manager.
 GPIO3 remains reserved for EPD_BUSY.
 <!-- END RUSTMIX_WAVE_READER_FOUNDATION_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_SD_TXT_FIRST_PAGE_V0 -->
+## Rustmix-Wave SD TXT First Page v0
+
+Rustmix-Wave now reads one TXT file from the microSD card through the existing
+`ReaderStorage` trait and renders its first page through the existing reader
+renderer.
+
+Runtime path:
+
+`SD TXT -> SdTxtReaderStorage -> ReaderStorage -> ReaderDisplaySurface -> ShellDisplayBridge -> DisplayBackendAdapter`
+
+This slice adds:
+
+- Waveshare SDMMC mount.
+- SD-backed `ReaderStorage`.
+- `/sdcard/RUSTMIX/BOOKS/WAVE.TXT` sample book creation if missing.
+- first-page render from real SD bytes.
+
+This slice intentionally does not enable EPUB, bookmarks/progress persistence,
+real rotary input, or the full Rustmix X4 reader manager. GPIO3 remains reserved
+for EPD_BUSY.
+<!-- END RUSTMIX_WAVE_SD_TXT_FIRST_PAGE_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_TXT_BOOT_FLOW_CLEANUP_V0 -->
+## Rustmix-Wave TXT Boot Flow Cleanup v0
+
+Rustmix-Wave now boots directly into the SD TXT reader path instead of running
+old display/dashboard/mock-reader verification flows.
+
+Runtime path:
+
+boot -> ShellDisplayBridge -> SD mount -> SdTxtReaderStorage -> ReaderDisplaySurface
+
+This slice removes runtime calls for:
+
+- dashboard navigation smoke
+- mock reader first/next/previous smoke
+- old display verification/smoke path
+
+It keeps the accepted display backend and SD TXT reader path. GPIO3 remains
+reserved for EPD_BUSY. EPUB, bookmarks/progress persistence, and real rotary
+input remain out of scope.
+<!-- END RUSTMIX_WAVE_TXT_BOOT_FLOW_CLEANUP_V0 -->
