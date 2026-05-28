@@ -311,3 +311,22 @@ is not used by this slice. GPIO3 remains reserved for EPD_BUSY.
 This slice does not use interrupts, does not enable EPUB, and does not add
 bookmark/progress persistence.
 <!-- END RUSTMIX_WAVE_BUTTON_READER_NAVIGATION_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_REAL_TXT_PAGINATION_V0 -->
+## Rustmix-Wave Real TXT Pagination v0
+
+Rustmix-Wave now calculates TXT page count from the selected SD TXT file length
+instead of using the old placeholder three-page model.
+
+This slice adds:
+
+- TXT metadata length lookup.
+- ReaderScreenState initialized from real TXT length.
+- real page offsets.
+- clamped next/previous page movement.
+- real page number display.
+- progress bar based on current page and total pages.
+
+This is still simple byte-stride pagination. EPUB, bookmarks/progress
+persistence, and layout-aware pagination remain out of scope.
+<!-- END RUSTMIX_WAVE_REAL_TXT_PAGINATION_V0 -->

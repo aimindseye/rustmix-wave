@@ -1038,6 +1038,8 @@ pub mod reader_foundation {
 
     use crate::{raw_marker, reader_display::ReaderDisplaySurface};
 
+    pub const READER_TXT_PAGE_BYTES: usize = 720;
+
     pub struct ReaderBook {
         pub id: &'static str,
         pub title: &'static str,
@@ -1115,28 +1117,59 @@ THIS FOUNDATION LETS THE NEXT SLICE REPLACE MOCK STORAGE WITH REAL SD TXT READIN
         }
     }
 
-    pub struct ReaderScreenState {
+        pub struct ReaderScreenState {
         pub selected_book_index: usize,
         pub page_index: usize,
-        pub total_pages_placeholder: usize,
+        pub total_pages: usize,
+        pub page_byte_stride: usize,
     }
 
     impl ReaderScreenState {
         pub fn new(selected_book_index: usize, page_index: usize) -> Self {
+            Self::new_with_total_pages(selected_book_index, page_index, 3)
+        }
+
+        pub fn new_with_total_pages(
+            selected_book_index: usize,
+            page_index: usize,
+            total_pages: usize,
+        ) -> Self {
+            let total_pages = core::cmp::max(1, total_pages);
+            let max_page = total_pages.saturating_sub(1);
+
             Self {
                 selected_book_index,
-                page_index,
-                total_pages_placeholder: 3,
+                page_index: core::cmp::min(page_index, max_page),
+                total_pages,
+                page_byte_stride: READER_TXT_PAGE_BYTES,
             }
         }
 
+        pub fn for_txt_len(selected_book_index: usize, byte_len: usize) -> Self {
+            let total_pages = if byte_len == 0 {
+                1
+            } else {
+                (byte_len + READER_TXT_PAGE_BYTES - 1) / READER_TXT_PAGE_BYTES
+            };
+
+            Self::new_with_total_pages(selected_book_index, 0, total_pages)
+        }
+
         pub fn next_page(&mut self) {
-            let max_page = self.total_pages_placeholder.saturating_sub(1);
+            let max_page = self.total_pages.saturating_sub(1);
             self.page_index = core::cmp::min(self.page_index.saturating_add(1), max_page);
         }
 
         pub fn previous_page(&mut self) {
             self.page_index = self.page_index.saturating_sub(1);
+        }
+
+        pub fn page_number(&self) -> usize {
+            self.page_index.saturating_add(1)
+        }
+
+        pub fn page_offset(&self) -> usize {
+            self.page_index.saturating_mul(self.page_byte_stride)
         }
     }
 
@@ -1271,12 +1304,51 @@ THIS FOUNDATION LETS THE NEXT SLICE REPLACE MOCK STORAGE WITH REAL SD TXT READIN
         }
     }
 
-    fn draw_page_label<D: ReaderDisplaySurface>(display: &mut D, page_index: usize) {
-        match page_index {
-            0 => draw_text(display, 360, 744, 2, "PAGE 1 / 3", false),
-            1 => draw_text(display, 360, 744, 2, "PAGE 2 / 3", false),
-            _ => draw_text(display, 360, 744, 2, "PAGE 3 / 3", false),
+        fn draw_number<D: ReaderDisplaySurface>(
+        display: &mut D,
+        mut x: u32,
+        y: u32,
+        scale: u32,
+        mut value: usize,
+        black: bool,
+    ) -> u32 {
+        let mut digits = [0u8; 10];
+        let mut len = 0usize;
+
+        if value == 0 {
+            digits[0] = b'0';
+            len = 1;
+        } else {
+            while value > 0 && len < digits.len() {
+                digits[len] = b'0' + (value % 10) as u8;
+                value /= 10;
+                len += 1;
+            }
         }
+
+        while len > 0 {
+            len -= 1;
+            draw_char(display, x, y, scale, digits[len] as char, black);
+            x = x.saturating_add(6 * scale);
+        }
+
+        x
+    }
+
+    fn draw_page_label<D: ReaderDisplaySurface>(
+        display: &mut D,
+        state: &ReaderScreenState,
+    ) {
+        let mut x = 312;
+        let y = 744;
+        let scale = 2;
+
+        draw_text(display, x, y, scale, "PAGE", false);
+        x = x.saturating_add(42);
+        x = draw_number(display, x, y, scale, state.page_number(), false);
+        draw_text(display, x, y, scale, "/", false);
+        x = x.saturating_add(12);
+        let _ = draw_number(display, x, y, scale, state.total_pages, false);
     }
 
     pub fn render_reader_page_v0<D, S>(
@@ -1296,8 +1368,8 @@ THIS FOUNDATION LETS THE NEXT SLICE REPLACE MOCK STORAGE WITH REAL SD TXT READIN
         }
 
         let book = &books[state.selected_book_index];
-        let mut buf = [0u8; 768];
-        let offset = state.page_index.saturating_mul(300);
+        let mut buf = [0u8; READER_TXT_PAGE_BYTES];
+        let offset = state.page_offset();
         let n = storage.read_file_chunk(book.path, offset, &mut buf)?;
         let text = core::str::from_utf8(&buf[..n]).unwrap_or("");
 
@@ -1308,8 +1380,6 @@ THIS FOUNDATION LETS THE NEXT SLICE REPLACE MOCK STORAGE WITH REAL SD TXT READIN
 
         display.fill_rect(0, 0, width, 64, true);
         draw_text(display, 18, 18, 3, book.title, false);
-        draw_page_label(display, state.page_index);
-
         display.fill_rect(32, 88, width.saturating_sub(64), 3, true);
         display.fill_rect(32, height.saturating_sub(104), width.saturating_sub(64), 3, true);
         display.fill_rect(32, 88, 3, height.saturating_sub(192), true);
@@ -1319,19 +1389,18 @@ THIS FOUNDATION LETS THE NEXT SLICE REPLACE MOCK STORAGE WITH REAL SD TXT READIN
 
         display.fill_rect(0, height.saturating_sub(64), width, 64, true);
 
-        let progress_w = match state.page_index {
-            0 => 120,
-            1 => 240,
-            _ => 360,
-        };
+        let page_number = state.page_number();
+        let total_pages = core::cmp::max(1, state.total_pages);
+        let progress_w = core::cmp::max(
+            8,
+            core::cmp::min(360, ((360usize * page_number) / total_pages) as u32),
+        );
+
         display.fill_rect(24, height.saturating_sub(38), 360, 8, false);
         display.fill_rect(24, height.saturating_sub(38), progress_w, 8, true);
 
-        match state.page_index {
-            0 => draw_text(display, 24, height.saturating_sub(58), 2, "MOCK FIRST PAGE", false),
-            1 => draw_text(display, 24, height.saturating_sub(58), 2, "MOCK NEXT PAGE", false),
-            _ => draw_text(display, 24, height.saturating_sub(58), 2, "MOCK PREV PAGE", false),
-        }
+        draw_text(display, 24, height.saturating_sub(58), 2, "SD TXT PAGE", false);
+        draw_page_label(display, state);
 
         display.flush()?;
 

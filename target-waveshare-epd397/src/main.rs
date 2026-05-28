@@ -139,13 +139,21 @@ fn try_main() -> anyhow::Result<()> {
 
     ensure_sd_txt_sample_book_v0()?;
 
+    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-PAGINATION-V0-START\n\0");
+
+    let txt_len = fs::metadata(RUSTMIX_WAVE_SD_BOOK_PATH)
+        .context("Rustmix-Wave TXT metadata failed")?
+        .len() as usize;
+    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-PAGINATION-LEN-OK\n\0");
+
     let mut sd_storage = SdTxtReaderStorage::new();
-    let mut sd_state = ReaderScreenState::new(0, 0);
+    let mut sd_state = ReaderScreenState::for_txt_len(0, txt_len);
 
     render_reader_page_v0(&mut shell_display, &mut sd_storage, &sd_state)
         .context("Rustmix-Wave TXT boot first page render failed")?;
 
     raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BOOT-FIRST-PAGE-OK\n\0");
+    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-PAGINATION-V0-OK\n\0");
     raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-NAV-READY\n\0");
     raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BOOT-FLOW-V0-OK\n\0");
 
