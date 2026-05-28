@@ -27,6 +27,21 @@ pub mod board {
     pub const EPD_DC: i32 = 9;
     pub const EPD_RST: i32 = 46;
     pub const EPD_BUSY: i32 = 3;
+
+    // Official Waveshare ESP32-S3 e-Paper 3.97 SDMMC pin map from 04_SD_Test.
+    pub const SDMMC_D0: i32 = 15;
+    pub const SDMMC_D1: i32 = 7;
+    pub const SDMMC_D2: i32 = 8;
+    pub const SDMMC_D3: i32 = 18;
+    pub const SDMMC_CLK: i32 = 16;
+    pub const SDMMC_CMD: i32 = 17;
+
+    // Waveshare app buttons from vendor examples.
+    // Pull-up inputs, active-low.
+    pub const BUTTON_UP: i32 = 4;
+    pub const BUTTON_FUNCTION: i32 = 5;
+    pub const BUTTON_DOWN: i32 = 6;
+    pub const BUTTON_BOOT: i32 = 0; // Documented only; not used by Rustmix-Wave navigation v0.
 }
 
 pub fn raw_marker(msg: &'static [u8]) {

@@ -293,3 +293,21 @@ It keeps the accepted display backend and SD TXT reader path. GPIO3 remains
 reserved for EPD_BUSY. EPUB, bookmarks/progress persistence, and real rotary
 input remain out of scope.
 <!-- END RUSTMIX_WAVE_TXT_BOOT_FLOW_CLEANUP_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_BUTTON_READER_NAVIGATION_V0 -->
+## Rustmix-Wave Button Reader Navigation v0
+
+Rustmix-Wave now polls the vendor app buttons for reader navigation.
+
+Button mapping:
+
+- GPIO4 Button_Up: previous page
+- GPIO5 Button_Function: refresh/select current page
+- GPIO6 Button_Down: next page
+
+The buttons are pull-up inputs and active-low. GPIO0 Boot is documented only and
+is not used by this slice. GPIO3 remains reserved for EPD_BUSY.
+
+This slice does not use interrupts, does not enable EPUB, and does not add
+bookmark/progress persistence.
+<!-- END RUSTMIX_WAVE_BUTTON_READER_NAVIGATION_V0 -->

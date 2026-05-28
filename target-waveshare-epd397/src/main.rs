@@ -126,19 +126,75 @@ fn try_main() -> anyhow::Result<()> {
 
     raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BOOT-SD-MOUNT-OK\n\0");
 
+    raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-NAV-V0-START\n\0");
+
+    let mut button_up = PinDriver::input(pins.gpio4, Pull::Up)
+        .context("Waveshare Button_Up GPIO4 input init failed")?;
+    let mut button_function = PinDriver::input(pins.gpio5, Pull::Up)
+        .context("Waveshare Button_Function GPIO5 input init failed")?;
+    let mut button_down = PinDriver::input(pins.gpio6, Pull::Up)
+        .context("Waveshare Button_Down GPIO6 input init failed")?;
+
+    raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-NAV-PINS-OK\n\0");
+
     ensure_sd_txt_sample_book_v0()?;
 
     let mut sd_storage = SdTxtReaderStorage::new();
-    let sd_state = ReaderScreenState::new(0, 0);
+    let mut sd_state = ReaderScreenState::new(0, 0);
 
     render_reader_page_v0(&mut shell_display, &mut sd_storage, &sd_state)
         .context("Rustmix-Wave TXT boot first page render failed")?;
 
     raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BOOT-FIRST-PAGE-OK\n\0");
+    raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-NAV-READY\n\0");
     raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BOOT-FLOW-V0-OK\n\0");
 
+    let mut last_up_pressed = button_up.is_low();
+    let mut last_function_pressed = button_function.is_low();
+    let mut last_down_pressed = button_down.is_low();
+
     loop {
-        esp_idf_hal::delay::FreeRtos::delay_ms(1000);
+        let up_pressed = button_up.is_low();
+        let function_pressed = button_function.is_low();
+        let down_pressed = button_down.is_low();
+
+        if down_pressed && !last_down_pressed {
+            raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-DOWN-NEXT\n\0");
+            sd_state.next_page();
+
+            render_reader_page_v0(&mut shell_display, &mut sd_storage, &sd_state)
+                .context("Rustmix-Wave button next page render failed")?;
+
+            raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-DOWN-NEXT-OK\n\0");
+            esp_idf_hal::delay::FreeRtos::delay_ms(220);
+        }
+
+        if up_pressed && !last_up_pressed {
+            raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-UP-PREV\n\0");
+            sd_state.previous_page();
+
+            render_reader_page_v0(&mut shell_display, &mut sd_storage, &sd_state)
+                .context("Rustmix-Wave button previous page render failed")?;
+
+            raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-UP-PREV-OK\n\0");
+            esp_idf_hal::delay::FreeRtos::delay_ms(220);
+        }
+
+        if function_pressed && !last_function_pressed {
+            raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-FUNCTION-REFRESH\n\0");
+
+            render_reader_page_v0(&mut shell_display, &mut sd_storage, &sd_state)
+                .context("Rustmix-Wave button function refresh render failed")?;
+
+            raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-FUNCTION-REFRESH-OK\n\0");
+            esp_idf_hal::delay::FreeRtos::delay_ms(220);
+        }
+
+        last_up_pressed = up_pressed;
+        last_function_pressed = function_pressed;
+        last_down_pressed = down_pressed;
+
+        esp_idf_hal::delay::FreeRtos::delay_ms(35);
     }
 }
 
