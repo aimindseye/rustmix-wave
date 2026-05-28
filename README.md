@@ -369,3 +369,73 @@ The map classifies X4 reader/UI files into:
 
 This slice is docs and validation only. It does not change runtime behavior.
 <!-- END RUSTMIX_WAVE_X4_READER_REUSE_MAP_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_X4_READER_LAYOUT_PORT_V0 -->
+## Rustmix-Wave X4 Reader Layout Port v0
+
+Rustmix-Wave now uses a compact reader layout inspired by the X4 reader direction.
+
+This slice keeps the accepted Wave runtime path and changes presentation only:
+
+- compact header and footer
+- selected book title in the reader header
+- page number in the header
+- thin separators instead of a large content border
+- wider and taller body text area
+- footer hints and progress bar
+
+This slice does not port the X4 font engine or layout-aware pagination yet.
+<!-- END RUSTMIX_WAVE_X4_READER_LAYOUT_PORT_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_X4_TXT_LAYOUT_PAGINATION_PORT_V0 -->
+## Rustmix-Wave X4 TXT Layout Pagination Port v0
+
+Rustmix-Wave now builds TXT pages from rendered wrapped lines instead of raw
+byte offsets.
+
+This slice keeps the TXT browser, button navigation, and compact reader layout,
+then adds:
+
+- full selected TXT read through ReaderStorage
+- Project Gutenberg boilerplate skip when markers are present
+- word wrapping
+- line/page pagination
+- real total pages based on rendered line count
+- clamped next/previous through the existing ReaderScreenState
+
+The current bitmap/debug-style font remains in place. EPUB and bookmark/progress
+persistence remain out of scope.
+<!-- END RUSTMIX_WAVE_X4_TXT_LAYOUT_PAGINATION_PORT_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_X4_TXT_LAYOUT_PAGINATION_BOUNDED_READ_REPAIR_V0 -->
+## Rustmix-Wave X4 TXT Layout Pagination Bounded Read Repair v0
+
+The first layout-pagination port tried to read the selected TXT book into RAM
+before wrapping. Large TXT files could panic/reset before the book opened.
+
+This repair adds a bounded read for layout pagination:
+
+- `READER_LAYOUT_MAX_BOOK_BYTES = 65536`
+- bounded TXT read before wrapping
+- explicit bounded-read markers
+- no display/input/storage ownership changes
+
+This is a stability repair. A future streaming page index/cache should replace
+the bounded full-read approach.
+<!-- END RUSTMIX_WAVE_X4_TXT_LAYOUT_PAGINATION_BOUNDED_READ_REPAIR_V0 -->
+
+<!-- BEGIN RUSTMIX_WAVE_X4_TXT_LAYOUT_PAGINATION_HEAP_SAFE_REPAIR_V0 -->
+## Rustmix-Wave X4 TXT Layout Pagination Heap-Safe Repair v0
+
+Large TXT books still panicked after the bounded read completed, likely during
+UTF-8 conversion or wrapped-line construction.
+
+This repair makes the temporary layout-pagination path more conservative:
+
+- `READER_LAYOUT_MAX_BOOK_BYTES = 16384`
+- `READER_LAYOUT_MAX_LINES = 192`
+- extra markers around UTF-8 and wrapping
+
+This is a stability patch. A streaming TXT page index/cache remains the correct
+long-term architecture.
+<!-- END RUSTMIX_WAVE_X4_TXT_LAYOUT_PAGINATION_HEAP_SAFE_REPAIR_V0 -->

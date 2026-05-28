@@ -20,8 +20,13 @@ use hal_waveshare_epd397::{
     board,
     display::{DisplayBackendAdapter, ShellDisplayBridge},
     raw_marker,
+    txt_book_browser::render_txt_book_browser_v0,
     reader_foundation::{
         render_reader_page_v0,
+        render_reader_page_with_title_v0,
+        build_txt_layout_pagination_v0,
+        render_reader_layout_page_with_title_v0,
+        TxtLayoutPagination,
         ReaderBook,
         ReaderScreenState,
         ReaderStorage,
@@ -137,23 +142,22 @@ fn try_main() -> anyhow::Result<()> {
 
     raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-NAV-PINS-OK\n\0");
 
-    ensure_sd_txt_sample_book_v0()?;
+    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-V0-START\n\0");
 
-    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-PAGINATION-V0-START\n\0");
+    let browser_books = scan_txt_browser_books_v0()?;
+    let mut browser_selected_index = 0usize;
+    let mut reader_mode = RustmixWaveReaderMode::Browser;
 
-    let txt_len = fs::metadata(RUSTMIX_WAVE_SD_BOOK_PATH)
-        .context("Rustmix-Wave TXT metadata failed")?
-        .len() as usize;
-    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-PAGINATION-LEN-OK\n\0");
+    render_txt_browser_screen_v0(&mut shell_display, &browser_books, browser_selected_index)
+        .context("Rustmix-Wave TXT book browser render failed")?;
+
+    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-BOOT-OK\n\0");
 
     let mut sd_storage = SdTxtReaderStorage::new();
-    let mut sd_state = ReaderScreenState::for_txt_len(0, txt_len);
+    let mut sd_state = ReaderScreenState::new_with_total_pages(0, 0, 1);
+    let mut reader_title = String::from("TXT BOOK");
+    let mut txt_layout = None::<TxtLayoutPagination>;
 
-    render_reader_page_v0(&mut shell_display, &mut sd_storage, &sd_state)
-        .context("Rustmix-Wave TXT boot first page render failed")?;
-
-    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BOOT-FIRST-PAGE-OK\n\0");
-    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-PAGINATION-V0-OK\n\0");
     raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-NAV-READY\n\0");
     raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BOOT-FLOW-V0-OK\n\0");
 
@@ -167,34 +171,140 @@ fn try_main() -> anyhow::Result<()> {
         let down_pressed = button_down.is_low();
 
         if down_pressed && !last_down_pressed {
-            raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-DOWN-NEXT\n\0");
-            sd_state.next_page();
+            match reader_mode {
+                RustmixWaveReaderMode::Browser => {
+                    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-SELECT-DOWN\n\0");
 
-            render_reader_page_v0(&mut shell_display, &mut sd_storage, &sd_state)
-                .context("Rustmix-Wave button next page render failed")?;
+                    if !browser_books.is_empty() {
+                        let max_index = browser_books.len().saturating_sub(1);
+                        browser_selected_index =
+                            core::cmp::min(browser_selected_index.saturating_add(1), max_index);
+                    }
 
-            raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-DOWN-NEXT-OK\n\0");
+                    render_txt_browser_screen_v0(
+                        &mut shell_display,
+                        &browser_books,
+                        browser_selected_index,
+                    )
+                    .context("Rustmix-Wave TXT browser select down render failed")?;
+
+                    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-SELECT-DOWN-OK\n\0");
+                }
+                RustmixWaveReaderMode::Reader => {
+                    raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-DOWN-NEXT\n\0");
+                    sd_state.next_page();
+
+                    render_reader_layout_page_with_title_v0(
+                        &mut shell_display,
+                        reader_title.as_str(),
+                        txt_layout
+                            .as_ref()
+                            .context("Rustmix-Wave TXT layout pagination missing")?,
+                        &sd_state,
+                    )
+                    .context("Rustmix-Wave button next page render failed")?;
+
+                    raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-DOWN-NEXT-OK\n\0");
+                }
+            }
+
             esp_idf_hal::delay::FreeRtos::delay_ms(220);
         }
 
         if up_pressed && !last_up_pressed {
-            raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-UP-PREV\n\0");
-            sd_state.previous_page();
+            match reader_mode {
+                RustmixWaveReaderMode::Browser => {
+                    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-SELECT-UP\n\0");
 
-            render_reader_page_v0(&mut shell_display, &mut sd_storage, &sd_state)
-                .context("Rustmix-Wave button previous page render failed")?;
+                    browser_selected_index = browser_selected_index.saturating_sub(1);
 
-            raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-UP-PREV-OK\n\0");
+                    render_txt_browser_screen_v0(
+                        &mut shell_display,
+                        &browser_books,
+                        browser_selected_index,
+                    )
+                    .context("Rustmix-Wave TXT browser select up render failed")?;
+
+                    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-SELECT-UP-OK\n\0");
+                }
+                RustmixWaveReaderMode::Reader => {
+                    raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-UP-PREV\n\0");
+                    sd_state.previous_page();
+
+                    render_reader_layout_page_with_title_v0(
+                        &mut shell_display,
+                        reader_title.as_str(),
+                        txt_layout
+                            .as_ref()
+                            .context("Rustmix-Wave TXT layout pagination missing")?,
+                        &sd_state,
+                    )
+                    .context("Rustmix-Wave button previous page render failed")?;
+
+                    raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-UP-PREV-OK\n\0");
+                }
+            }
+
             esp_idf_hal::delay::FreeRtos::delay_ms(220);
         }
 
         if function_pressed && !last_function_pressed {
-            raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-FUNCTION-REFRESH\n\0");
+            match reader_mode {
+                RustmixWaveReaderMode::Browser => {
+                    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-FUNCTION-OPEN\n\0");
 
-            render_reader_page_v0(&mut shell_display, &mut sd_storage, &sd_state)
-                .context("Rustmix-Wave button function refresh render failed")?;
+                    let txt_len = open_selected_txt_book_v0(&browser_books, browser_selected_index)?;
 
-            raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-FUNCTION-REFRESH-OK\n\0");
+                    if txt_len > 0 {
+                        if let Some(selected_book) = browser_books.get(browser_selected_index) {
+                            reader_title = selected_book.title.clone();
+                            raw_marker(b"RAW-RUSTMIX-WAVE-X4-READER-LAYOUT-TITLE-OK\n\0");
+                        }
+
+                        txt_layout = Some(
+                            build_txt_layout_pagination_v0(&mut sd_storage, 0)
+                                .context("Rustmix-Wave TXT layout pagination build failed")?,
+                        );
+
+                        let total_pages = txt_layout
+                            .as_ref()
+                            .map(|layout| layout.total_pages())
+                            .unwrap_or(1);
+
+                        sd_state = ReaderScreenState::new_with_total_pages(0, 0, total_pages);
+
+                        render_reader_layout_page_with_title_v0(
+                            &mut shell_display,
+                            reader_title.as_str(),
+                            txt_layout
+                                .as_ref()
+                                .context("Rustmix-Wave TXT layout pagination missing")?,
+                            &sd_state,
+                        )
+                        .context("Rustmix-Wave selected TXT book first page render failed")?;
+                        raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-TARGET-OK\n\0");
+
+                        reader_mode = RustmixWaveReaderMode::Reader;
+                        raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-FUNCTION-OPEN-OK\n\0");
+                    }
+                }
+                RustmixWaveReaderMode::Reader => {
+                    raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-FUNCTION-REFRESH\n\0");
+
+                    render_reader_layout_page_with_title_v0(
+                        &mut shell_display,
+                        reader_title.as_str(),
+                        txt_layout
+                            .as_ref()
+                            .context("Rustmix-Wave TXT layout pagination missing")?,
+                        &sd_state,
+                    )
+                    .context("Rustmix-Wave button function refresh render failed")?;
+
+                    raw_marker(b"RAW-RUSTMIX-WAVE-BUTTON-FUNCTION-REFRESH-OK\n\0");
+                }
+            }
+
             esp_idf_hal::delay::FreeRtos::delay_ms(220);
         }
 
@@ -205,6 +315,110 @@ fn try_main() -> anyhow::Result<()> {
         esp_idf_hal::delay::FreeRtos::delay_ms(35);
     }
 }
+
+// BEGIN RUSTMIX_WAVE_TXT_BOOK_BROWSER_TARGET_V0
+struct TxtBrowserBook {
+    title: String,
+    path: PathBuf,
+}
+
+enum RustmixWaveReaderMode {
+    Browser,
+    Reader,
+}
+
+fn txt_browser_title_from_path_v0(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("TXT BOOK")
+        .chars()
+        .map(|ch| if ch.is_ascii_graphic() || ch == ' ' { ch } else { ' ' })
+        .collect()
+}
+
+fn scan_txt_browser_books_v0() -> anyhow::Result<Vec<TxtBrowserBook>> {
+    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-SCAN-START\n\0");
+
+    let books_dir = Path::new("/sdcard/BOOKS");
+    let entries = match fs::read_dir(books_dir) {
+        Ok(entries) => entries,
+        Err(_) => {
+            raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-SCAN-EMPTY\n\0");
+            return Ok(Vec::new());
+        }
+    };
+
+    let mut books = Vec::new();
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+
+        let path = entry.path();
+
+        if !path.is_file() || !is_txt_path_v0(&path) {
+            continue;
+        }
+
+        books.push(TxtBrowserBook {
+            title: txt_browser_title_from_path_v0(&path),
+            path,
+        });
+    }
+
+    books.sort_by(|a, b| a.title.cmp(&b.title));
+
+    if books.is_empty() {
+        raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-SCAN-EMPTY\n\0");
+    } else {
+        raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-SCAN-OK\n\0");
+    }
+
+    Ok(books)
+}
+
+fn render_txt_browser_screen_v0(
+    display: &mut ShellDisplayBridge<'_>,
+    books: &[TxtBrowserBook],
+    selected_index: usize,
+) -> anyhow::Result<()> {
+    let titles: Vec<&str> = books.iter().map(|book| book.title.as_str()).collect();
+    render_txt_book_browser_v0(display, &titles, selected_index)
+}
+
+fn open_selected_txt_book_v0(
+    books: &[TxtBrowserBook],
+    selected_index: usize,
+) -> anyhow::Result<usize> {
+    if books.is_empty() {
+        raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-OPEN-EMPTY\n\0");
+        return Ok(0);
+    }
+
+    let selected_index = core::cmp::min(selected_index, books.len().saturating_sub(1));
+    let selected = &books[selected_index];
+
+    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-OPEN-SELECTED\n\0");
+
+    fs::create_dir_all(RUSTMIX_WAVE_SD_BOOK_DIR)
+        .context("create fixed Rustmix-Wave TXT book dir failed")?;
+
+    fs::copy(&selected.path, RUSTMIX_WAVE_SD_BOOK_PATH)
+        .with_context(|| format!("copy selected TXT book failed: {}", selected.path.display()))?;
+
+    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-OPEN-COPIED\n\0");
+
+    let txt_len = fs::metadata(RUSTMIX_WAVE_SD_BOOK_PATH)
+        .context("Rustmix-Wave selected TXT metadata failed")?
+        .len() as usize;
+
+    raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-OPEN-OK\n\0");
+
+    Ok(txt_len)
+}
+// END RUSTMIX_WAVE_TXT_BOOK_BROWSER_TARGET_V0
 
 // BEGIN RUSTMIX_WAVE_SD_TXT_FIRST_PAGE_V0
 const RUSTMIX_WAVE_SD_BOOK_DIR: &str = "/sdcard/RUSTMIX/BOOKS";

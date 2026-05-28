@@ -1351,20 +1351,431 @@ THIS FOUNDATION LETS THE NEXT SLICE REPLACE MOCK STORAGE WITH REAL SD TXT READIN
         let _ = draw_number(display, x, y, scale, state.total_pages, false);
     }
 
-    pub fn render_reader_page_v0<D, S>(
+        fn draw_text_clipped_reader<D: ReaderDisplaySurface>(
+        display: &mut D,
+        mut x: u32,
+        y: u32,
+        scale: u32,
+        text: &str,
+        max_chars: usize,
+        black: bool,
+    ) {
+        for ch in text.chars().take(max_chars) {
+            let ch = if ch.is_ascii_lowercase() {
+                ch.to_ascii_uppercase()
+            } else if ch.is_ascii_graphic() || ch == ' ' {
+                ch
+            } else {
+                ' '
+            };
+
+            draw_char(display, x, y, scale, ch, black);
+            x = x.saturating_add(6 * scale);
+        }
+    }
+
+    fn draw_page_label_compact<D: ReaderDisplaySurface>(
+        display: &mut D,
+        mut x: u32,
+        y: u32,
+        scale: u32,
+        state: &ReaderScreenState,
+        black: bool,
+    ) {
+        draw_text(display, x, y, scale, "PAGE", black);
+        x = x.saturating_add(42);
+        x = draw_number(display, x, y, scale, state.page_number(), black);
+        draw_text(display, x, y, scale, "/", black);
+        x = x.saturating_add(12);
+        let _ = draw_number(display, x, y, scale, state.total_pages, black);
+    }
+
+// BEGIN RUSTMIX_WAVE_X4_TXT_LAYOUT_PAGINATION_V0
+    pub const READER_LAYOUT_BODY_MAX_CHARS: usize = 36;
+    pub const READER_LAYOUT_LINES_PER_PAGE: usize = 32;
+    pub const READER_LAYOUT_MAX_LINES: usize = 192;
+    pub const READER_LAYOUT_READ_CHUNK: usize = 768;
+    pub const READER_LAYOUT_MAX_BOOK_BYTES: usize = 16384;
+
+    pub struct TxtLayoutPagination {
+        pub lines: Vec<String>,
+        pub lines_per_page: usize,
+    }
+
+    impl TxtLayoutPagination {
+        pub fn new(lines: Vec<String>, lines_per_page: usize) -> Self {
+            let lines_per_page = core::cmp::max(1, lines_per_page);
+
+            Self {
+                lines,
+                lines_per_page,
+            }
+        }
+
+        pub fn total_pages(&self) -> usize {
+            if self.lines.is_empty() {
+                1
+            } else {
+                (self.lines.len() + self.lines_per_page - 1) / self.lines_per_page
+            }
+        }
+
+        pub fn page_range(&self, page_index: usize) -> (usize, usize) {
+            let total_pages = self.total_pages();
+            let clamped_page = core::cmp::min(page_index, total_pages.saturating_sub(1));
+            let start = clamped_page.saturating_mul(self.lines_per_page);
+            let end = core::cmp::min(self.lines.len(), start.saturating_add(self.lines_per_page));
+            (start, end)
+        }
+    }
+
+    fn normalize_txt_char_v0(ch: char) -> char {
+        if ch.is_ascii_graphic() || ch == ' ' {
+            ch
+        } else if ch.is_whitespace() {
+            ' '
+        } else {
+            '?'
+        }
+    }
+
+    fn push_wrapped_word_v0(
+        lines: &mut Vec<String>,
+        current: &mut String,
+        word: &str,
+        max_chars: usize,
+    ) {
+        if word.is_empty() {
+            return;
+        }
+
+        if word.len() > max_chars {
+            if !current.is_empty() {
+                lines.push(core::mem::take(current));
+            }
+
+            let mut chunk = String::new();
+
+            for ch in word.chars() {
+                chunk.push(ch);
+
+                if chunk.len() >= max_chars {
+                    lines.push(core::mem::take(&mut chunk));
+                }
+            }
+
+            if !chunk.is_empty() {
+                *current = chunk;
+            }
+
+            return;
+        }
+
+        let extra_space = if current.is_empty() { 0 } else { 1 };
+
+        if current.len().saturating_add(extra_space).saturating_add(word.len()) <= max_chars {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+
+            current.push_str(word);
+        } else {
+            if !current.is_empty() {
+                lines.push(core::mem::take(current));
+            }
+
+            current.push_str(word);
+        }
+    }
+
+    fn push_wrapped_line_v0(lines: &mut Vec<String>, raw: &str, max_chars: usize) {
+        let mut clean = String::new();
+
+        for ch in raw.chars() {
+            clean.push(normalize_txt_char_v0(ch));
+        }
+
+        let clean = clean.trim();
+
+        if clean.is_empty() {
+            if lines.last().map(|line| !line.is_empty()).unwrap_or(false) {
+                lines.push(String::new());
+            }
+
+            return;
+        }
+
+        let mut current = String::new();
+
+        for word in clean.split_whitespace() {
+            push_wrapped_word_v0(lines, &mut current, word, max_chars);
+        }
+
+        if !current.is_empty() {
+            lines.push(current);
+        }
+    }
+
+    fn is_gutenberg_start_marker_v0(line_upper: &str) -> bool {
+        line_upper.contains("START OF")
+            && line_upper.contains("PROJECT GUTENBERG")
+            && line_upper.contains("EBOOK")
+    }
+
+    fn is_gutenberg_end_marker_v0(line_upper: &str) -> bool {
+        line_upper.contains("END OF")
+            && line_upper.contains("PROJECT GUTENBERG")
+            && line_upper.contains("EBOOK")
+    }
+
+    fn build_wrapped_txt_lines_v0(text: &str) -> Vec<String> {
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-WRAP-START\n\0");
+
+        let has_gutenberg_start = text
+            .lines()
+            .any(|line| is_gutenberg_start_marker_v0(&line.to_ascii_uppercase()));
+
+        let mut in_body = !has_gutenberg_start;
+        let mut lines = Vec::new();
+
+        for raw_line in text.lines() {
+            if lines.len() >= READER_LAYOUT_MAX_LINES {
+                raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-WRAP-LIMIT-OK\n\0");
+                break;
+            }
+
+            let upper = raw_line.to_ascii_uppercase();
+
+            if !in_body {
+                if is_gutenberg_start_marker_v0(&upper) {
+                    in_body = true;
+                }
+
+                continue;
+            }
+
+            if is_gutenberg_end_marker_v0(&upper) {
+                break;
+            }
+
+            // Skip common boilerplate noise if it appears after a start marker.
+            if upper.contains("PRODUCED BY")
+                || upper.contains("TRANSCRIBED BY")
+                || upper.contains("UPDATED EDITIONS")
+                || upper.contains("CHARACTER SET ENCODING")
+            {
+                continue;
+            }
+
+            push_wrapped_line_v0(&mut lines, raw_line, READER_LAYOUT_BODY_MAX_CHARS);
+
+            if lines.len() >= READER_LAYOUT_MAX_LINES {
+                raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-WRAP-LIMIT-OK\n\0");
+                break;
+            }
+        }
+
+        while lines.first().map(|line| line.is_empty()).unwrap_or(false) {
+            lines.remove(0);
+        }
+
+        while lines.last().map(|line| line.is_empty()).unwrap_or(false) {
+            lines.pop();
+        }
+
+        if lines.is_empty() {
+            lines.push(String::from("EMPTY TXT BOOK"));
+        }
+
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-WRAP-DONE\n\0");
+
+        lines
+    }
+
+    fn read_reader_book_bytes_v0<S>(
+        storage: &mut S,
+        book_path: &str,
+    ) -> Result<Vec<u8>>
+    where
+        S: ReaderStorage,
+    {
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-BOUNDED-READ-START\n\0");
+
+        let mut data = Vec::new();
+        let mut offset = 0usize;
+
+        loop {
+            if data.len() >= READER_LAYOUT_MAX_BOOK_BYTES {
+                raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-READ-LIMIT-OK\n\0");
+                break;
+            }
+
+            let mut buf = [0u8; READER_LAYOUT_READ_CHUNK];
+            let n = storage.read_file_chunk(book_path, offset, &mut buf)?;
+
+            if n == 0 {
+                raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-READ-EOF-OK\n\0");
+                break;
+            }
+
+            let remaining = READER_LAYOUT_MAX_BOOK_BYTES.saturating_sub(data.len());
+            let take = core::cmp::min(n, remaining);
+
+            data.extend_from_slice(&buf[..take]);
+            offset = offset.saturating_add(n);
+
+            if take < n || data.len() >= READER_LAYOUT_MAX_BOOK_BYTES {
+                raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-READ-LIMIT-OK\n\0");
+                break;
+            }
+
+            if n < buf.len() {
+                raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-READ-EOF-OK\n\0");
+                break;
+            }
+        }
+
+        if data.is_empty() {
+            raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-READ-EMPTY\n\0");
+        }
+
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-BOUNDED-READ-OK\n\0");
+
+        Ok(data)
+    }
+
+    pub fn build_txt_layout_pagination_v0<S>(
+        storage: &mut S,
+        selected_book_index: usize,
+    ) -> Result<TxtLayoutPagination>
+    where
+        S: ReaderStorage,
+    {
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-V0-START\n\0");
+
+        let books = storage.list_books()?;
+
+        if selected_book_index >= books.len() {
+            return Err(anyhow!("layout pagination selected book out of range"));
+        }
+
+        let book = &books[selected_book_index];
+        let data = read_reader_book_bytes_v0(storage, book.path)?;
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-READ-OK\n\0");
+
+        let text = String::from_utf8_lossy(&data);
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-UTF8-OK\n\0");
+        let lines = build_wrapped_txt_lines_v0(text.as_ref());
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-WRAP-OK\n\0");
+
+        let pagination = TxtLayoutPagination::new(lines, READER_LAYOUT_LINES_PER_PAGE);
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGINATION-V0-OK\n\0");
+
+        Ok(pagination)
+    }
+
+    pub fn render_reader_layout_page_with_title_v0<D>(
+        display: &mut D,
+        title: &str,
+        pagination: &TxtLayoutPagination,
+        state: &ReaderScreenState,
+    ) -> Result<()>
+    where
+        D: ReaderDisplaySurface,
+    {
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGE-RENDER-START\n\0");
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-READER-LAYOUT-V0-START\n\0");
+        raw_marker(b"RAW-RUSTMIX-WAVE-READER-PAGE-RENDER-START\n\0");
+
+        let width = display.logical_width();
+        let height = display.logical_height();
+
+        display.clear();
+
+        let margin_x = 20u32;
+        let header_h = 44u32;
+        let footer_h = 42u32;
+        let body_y = header_h.saturating_add(16);
+        let footer_y = height.saturating_sub(footer_h);
+        let body_max_y = footer_y.saturating_sub(14);
+
+        draw_text_clipped_reader(display, margin_x, 14, 2, title, 26, true);
+        draw_page_label_compact(display, width.saturating_sub(132), 14, 2, state, true);
+
+        display.fill_rect(margin_x, header_h, width.saturating_sub(margin_x * 2), 2, true);
+        display.fill_rect(margin_x, footer_y, width.saturating_sub(margin_x * 2), 2, true);
+
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-READER-LAYOUT-HEADER-OK\n\0");
+
+        let (start, end) = pagination.page_range(state.page_index);
+        let mut y = body_y;
+        let line_h = 20u32;
+
+        for line in pagination.lines[start..end].iter() {
+            if y.saturating_add(line_h) > body_max_y {
+                break;
+            }
+
+            draw_text_clipped_reader(
+                display,
+                margin_x.saturating_add(2),
+                y,
+                2,
+                line,
+                READER_LAYOUT_BODY_MAX_CHARS,
+                true,
+            );
+
+            y = y.saturating_add(line_h);
+        }
+
+        let page_number = state.page_number();
+        let total_pages = core::cmp::max(1, state.total_pages);
+        let progress_w = core::cmp::max(
+            8,
+            core::cmp::min(
+                width.saturating_sub(margin_x * 2),
+                (((width.saturating_sub(margin_x * 2)) as usize * page_number) / total_pages)
+                    as u32,
+            ),
+        );
+
+        display.fill_rect(margin_x, footer_y.saturating_add(10), width.saturating_sub(margin_x * 2), 4, true);
+        display.fill_rect(margin_x, footer_y.saturating_add(10), progress_w, 8, true);
+
+        draw_text_clipped_reader(display, margin_x, footer_y.saturating_add(22), 2, "UP PREV", 8, true);
+        draw_text_clipped_reader(display, 178, footer_y.saturating_add(22), 2, "DOWN NEXT", 10, true);
+        draw_text_clipped_reader(display, 350, footer_y.saturating_add(22), 2, "FN MENU", 8, true);
+
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-READER-LAYOUT-FOOTER-OK\n\0");
+
+        display.flush()?;
+
+        raw_marker(b"RAW-RUSTMIX-WAVE-READER-PAGE-RENDER-OK\n\0");
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-READER-LAYOUT-V0-OK\n\0");
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-TXT-LAYOUT-PAGE-RENDER-OK\n\0");
+
+        Ok(())
+    }
+// END RUSTMIX_WAVE_X4_TXT_LAYOUT_PAGINATION_V0
+
+
+    pub fn render_reader_page_with_title_v0<D, S>(
         display: &mut D,
         storage: &mut S,
         state: &ReaderScreenState,
+        title_override: Option<&str>,
     ) -> Result<()>
     where
         D: ReaderDisplaySurface,
         S: ReaderStorage,
     {
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-READER-LAYOUT-V0-START\n\0");
         raw_marker(b"RAW-RUSTMIX-WAVE-READER-PAGE-RENDER-START\n\0");
 
         let books = storage.list_books()?;
         if state.selected_book_index >= books.len() {
-            return Err(anyhow!("mock reader selected book out of range"));
+            return Err(anyhow!("reader selected book out of range"));
         }
 
         let book = &books[state.selected_book_index];
@@ -1376,37 +1787,75 @@ THIS FOUNDATION LETS THE NEXT SLICE REPLACE MOCK STORAGE WITH REAL SD TXT READIN
         let width = display.logical_width();
         let height = display.logical_height();
 
+        let title = title_override.unwrap_or(book.title);
+
         display.clear();
 
-        display.fill_rect(0, 0, width, 64, true);
-        draw_text(display, 18, 18, 3, book.title, false);
-        display.fill_rect(32, 88, width.saturating_sub(64), 3, true);
-        display.fill_rect(32, height.saturating_sub(104), width.saturating_sub(64), 3, true);
-        display.fill_rect(32, 88, 3, height.saturating_sub(192), true);
-        display.fill_rect(width.saturating_sub(35), 88, 3, height.saturating_sub(192), true);
+        // Compact reader chrome inspired by the X4 reader: small header,
+        // small footer, no large content box.
+        let margin_x = 20u32;
+        let header_h = 44u32;
+        let footer_h = 42u32;
+        let body_y = header_h.saturating_add(16);
+        let footer_y = height.saturating_sub(footer_h);
+        let body_max_y = footer_y.saturating_sub(14);
 
-        draw_wrapped_text(display, 56, 124, width.saturating_sub(112), 640, 2, text);
+        draw_text_clipped_reader(display, margin_x, 14, 2, title, 26, true);
+        draw_page_label_compact(display, width.saturating_sub(132), 14, 2, state, true);
 
-        display.fill_rect(0, height.saturating_sub(64), width, 64, true);
+        display.fill_rect(margin_x, header_h, width.saturating_sub(margin_x * 2), 2, true);
+        display.fill_rect(margin_x, footer_y, width.saturating_sub(margin_x * 2), 2, true);
+
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-READER-LAYOUT-HEADER-OK\n\0");
+
+        draw_wrapped_text(
+            display,
+            margin_x.saturating_add(2),
+            body_y,
+            width.saturating_sub((margin_x.saturating_add(2)) * 2),
+            body_max_y,
+            2,
+            text,
+        );
 
         let page_number = state.page_number();
         let total_pages = core::cmp::max(1, state.total_pages);
         let progress_w = core::cmp::max(
             8,
-            core::cmp::min(360, ((360usize * page_number) / total_pages) as u32),
+            core::cmp::min(
+                width.saturating_sub(margin_x * 2),
+                (((width.saturating_sub(margin_x * 2)) as usize * page_number) / total_pages)
+                    as u32,
+            ),
         );
 
-        display.fill_rect(24, height.saturating_sub(38), 360, 8, false);
-        display.fill_rect(24, height.saturating_sub(38), progress_w, 8, true);
+        display.fill_rect(margin_x, footer_y.saturating_add(10), width.saturating_sub(margin_x * 2), 4, true);
+        display.fill_rect(margin_x, footer_y.saturating_add(10), progress_w, 8, true);
 
-        draw_text(display, 24, height.saturating_sub(58), 2, "SD TXT PAGE", false);
-        draw_page_label(display, state);
+        draw_text_clipped_reader(display, margin_x, footer_y.saturating_add(22), 2, "UP PREV", 8, true);
+        draw_text_clipped_reader(display, 178, footer_y.saturating_add(22), 2, "DOWN NEXT", 10, true);
+        draw_text_clipped_reader(display, 350, footer_y.saturating_add(22), 2, "FN MENU", 8, true);
+
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-READER-LAYOUT-FOOTER-OK\n\0");
 
         display.flush()?;
 
         raw_marker(b"RAW-RUSTMIX-WAVE-READER-PAGE-RENDER-OK\n\0");
+        raw_marker(b"RAW-RUSTMIX-WAVE-X4-READER-LAYOUT-V0-OK\n\0");
 
         Ok(())
+    }
+
+    pub fn render_reader_page_v0<D, S>(
+        display: &mut D,
+        storage: &mut S,
+        state: &ReaderScreenState,
+    ) -> Result<()>
+    where
+        D: ReaderDisplaySurface,
+        S: ReaderStorage,
+    {
+        render_reader_page_with_title_v0(display, storage, state, None)
     }
 
     pub fn render_reader_foundation_flow_v0<D>(display: &mut D) -> Result<()>
@@ -1439,3 +1888,198 @@ THIS FOUNDATION LETS THE NEXT SLICE REPLACE MOCK STORAGE WITH REAL SD TXT READIN
     }
 }
 // END RUSTMIX_WAVE_READER_FOUNDATION_V0
+
+// BEGIN RUSTMIX_WAVE_TXT_BOOK_BROWSER_V0
+pub mod txt_book_browser {
+    use anyhow::Result;
+
+    use crate::{raw_marker, reader_display::ReaderDisplaySurface};
+
+    fn glyph_5x7(ch: char) -> [u8; 7] {
+        match ch {
+            'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+            'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+            'C' => [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111],
+            'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+            'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+            'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+            'G' => [0b01111, 0b10000, 0b10000, 0b10011, 0b10001, 0b10001, 0b01111],
+            'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+            'I' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111],
+            'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100],
+            'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+            'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+            'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+            'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
+            'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+            'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
+            'Q' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+            'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+            'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+            'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+            'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+            'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+            'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010],
+            'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+            'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+            'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+            '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+            '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+            '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
+            '3' => [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
+            '4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+            '5' => [0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110],
+            '6' => [0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+            '7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+            '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+            '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110],
+            ':' => [0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000],
+            '-' => [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
+            '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100],
+            ' ' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000],
+            _ => [0b11111, 0b10001, 0b00110, 0b00100, 0b00110, 0b10001, 0b11111],
+        }
+    }
+
+    fn draw_char<D: ReaderDisplaySurface>(
+        display: &mut D,
+        x: u32,
+        y: u32,
+        scale: u32,
+        ch: char,
+        black: bool,
+    ) {
+        let glyph = glyph_5x7(ch.to_ascii_uppercase());
+
+        for (row, bits) in glyph.iter().enumerate() {
+            for col in 0..5u32 {
+                if (*bits & (1u8 << (4 - col))) != 0 {
+                    display.fill_rect(
+                        x + col * scale,
+                        y + row as u32 * scale,
+                        scale,
+                        scale,
+                        black,
+                    );
+                }
+            }
+        }
+    }
+
+    fn draw_text_clipped<D: ReaderDisplaySurface>(
+        display: &mut D,
+        mut x: u32,
+        y: u32,
+        scale: u32,
+        text: &str,
+        max_chars: usize,
+        black: bool,
+    ) {
+        for ch in text.chars().take(max_chars) {
+            draw_char(display, x, y, scale, ch, black);
+            x = x.saturating_add(6 * scale);
+        }
+    }
+
+    fn draw_number<D: ReaderDisplaySurface>(
+        display: &mut D,
+        mut x: u32,
+        y: u32,
+        scale: u32,
+        mut value: usize,
+        black: bool,
+    ) -> u32 {
+        let mut digits = [0u8; 10];
+        let mut len = 0usize;
+
+        if value == 0 {
+            digits[0] = b'0';
+            len = 1;
+        } else {
+            while value > 0 && len < digits.len() {
+                digits[len] = b'0' + (value % 10) as u8;
+                value /= 10;
+                len += 1;
+            }
+        }
+
+        while len > 0 {
+            len -= 1;
+            draw_char(display, x, y, scale, digits[len] as char, black);
+            x = x.saturating_add(6 * scale);
+        }
+
+        x
+    }
+
+    pub fn render_txt_book_browser_v0<D>(
+        display: &mut D,
+        titles: &[&str],
+        selected_index: usize,
+    ) -> Result<()>
+    where
+        D: ReaderDisplaySurface,
+    {
+        raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-RENDER-START\n\0");
+
+        let width = display.logical_width();
+        let height = display.logical_height();
+
+        display.clear();
+
+        display.fill_rect(0, 0, width, 64, true);
+        draw_text_clipped(display, 18, 18, 3, "TXT BOOKS", 16, false);
+
+        display.fill_rect(0, height.saturating_sub(64), width, 64, true);
+        draw_text_clipped(display, 18, height.saturating_sub(44), 2, "UP/DOWN SELECT  FUNCTION OPEN", 30, false);
+
+        if titles.is_empty() {
+            draw_text_clipped(display, 44, 150, 3, "NO TXT BOOKS FOUND", 22, true);
+            draw_text_clipped(display, 44, 210, 2, "COPY .TXT TO /BOOKS", 22, true);
+            display.flush()?;
+            raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-EMPTY\n\0");
+            raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-RENDER-OK\n\0");
+            return Ok(());
+        }
+
+        let selected_index = core::cmp::min(selected_index, titles.len().saturating_sub(1));
+        let visible_rows = 8usize;
+        let start = if selected_index >= visible_rows {
+            selected_index + 1 - visible_rows
+        } else {
+            0
+        };
+
+        let mut y = 92u32;
+        let end = core::cmp::min(titles.len(), start + visible_rows);
+
+        for idx in start..end {
+            let selected = idx == selected_index;
+            let row_h = 58u32;
+
+            if selected {
+                display.fill_rect(20, y.saturating_sub(8), width.saturating_sub(40), 48, true);
+                draw_text_clipped(display, 34, y + 4, 2, ">", 1, false);
+                draw_text_clipped(display, 58, y + 4, 2, titles[idx], 28, false);
+            } else {
+                display.fill_rect(20, y.saturating_sub(8), width.saturating_sub(40), 2, true);
+                draw_text_clipped(display, 58, y + 4, 2, titles[idx], 28, true);
+            }
+
+            y = y.saturating_add(row_h);
+        }
+
+        draw_text_clipped(display, 300, 24, 2, "BOOK", 8, false);
+        let x = draw_number(display, 360, 24, 2, selected_index + 1, false);
+        draw_text_clipped(display, x, 24, 2, "/", 1, false);
+        let _ = draw_number(display, x.saturating_add(12), 24, 2, titles.len(), false);
+
+        display.flush()?;
+
+        raw_marker(b"RAW-RUSTMIX-WAVE-TXT-BROWSER-RENDER-OK\n\0");
+
+        Ok(())
+    }
+}
+// END RUSTMIX_WAVE_TXT_BOOK_BROWSER_V0
+
