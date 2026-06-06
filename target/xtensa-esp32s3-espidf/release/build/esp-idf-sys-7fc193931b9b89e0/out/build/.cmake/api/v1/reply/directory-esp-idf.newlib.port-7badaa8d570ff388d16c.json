@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "esp-idf/newlib/port",
+		"source" : "/Users/piyushdaiya/.espressif/esp-idf/v5.4.3/components/newlib/port"
+	}
+}

@@ -1,0 +1,5 @@
+# Small host/smoke-test sample. Install the complete X4 pack with:
+# ./scripts/install-dictionary-x4-pack.sh /Volumes/YOUR_SD_CARD
+AA|DATA/AA.JSN
+AB|DATA/AB.JSN
+CA|DATA/CA.JSN

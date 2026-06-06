@@ -1,0 +1,6 @@
+id = "sokoban_tilt"
+name = "Sokoban Tilt"
+kind = "game"
+entry = "MAIN.LUA"
+version = "1.0"
+input = ["imu", "select", "back"]

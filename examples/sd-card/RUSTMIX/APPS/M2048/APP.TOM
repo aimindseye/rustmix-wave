@@ -1,0 +1,6 @@
+id = "motion_2048"
+name = "Motion 2048"
+kind = "game"
+entry = "MAIN.LUA"
+version = "1.0"
+input = ["imu", "select", "back"]

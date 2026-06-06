@@ -1,0 +1,14 @@
+{
+  "esp_idf_dir": "/Users/piyushdaiya/.espressif/esp-idf/v5.4.3",
+  "exported_path_var": "/Users/piyushdaiya/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20250730/xtensa-esp-elf/bin:/Users/piyushdaiya/.espressif/tools/esp-clang/esp-18.1.2_20240912/esp-clang/bin:/Users/piyushdaiya/.espressif/tools/esp32ulp-elf/2.38_20240113/esp32ulp-elf/bin:/Users/piyushdaiya/.espressif/tools/cmake/3.30.2/CMake.app/Contents/bin:/Users/piyushdaiya/.espressif/tools/ninja/1.12.1:/Users/piyushdaiya/.espressif/tools/esp-rom-elfs/20241011:/Users/piyushdaiya/.espressif/python_env/idf5.4_py3.14_env/bin:/Users/piyushdaiya/.rustup/toolchains/esp/xtensa-esp-elf/esp-15.2.0_20250920/xtensa-esp-elf/bin:/Applications/Postgres.app/Contents/Versions/17/bin:/Users/piyushdaiya/.cargo/bin:/Users/piyushdaiya/google-cloud-sdk/bin:/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/usr/local/go/bin:/Users/piyushdaiya/.cargo/bin:/Applications/iTerm.app/Contents/Resources/utilities:/Users/piyushdaiya/Library/Android/sdk/platform-tools:/Users/piyushdaiya/Library/Android/sdk/build-tools/36.1.0",
+  "venv_python": "/Users/piyushdaiya/.espressif/python_env/idf5.4_py3.14_env/bin/python",
+  "build_dir": "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-7fc193931b9b89e0/out/build",
+  "project_dir": "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-7fc193931b9b89e0/out",
+  "compiler": "/Users/piyushdaiya/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20250730/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc",
+  "mcu": "esp32s3",
+  "sdkconfig": null,
+  "sdkconfig_defaults": [
+    "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-7fc193931b9b89e0/out/gen-sdkconfig.defaults",
+    "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/sdkconfig.defaults"
+  ]
+}

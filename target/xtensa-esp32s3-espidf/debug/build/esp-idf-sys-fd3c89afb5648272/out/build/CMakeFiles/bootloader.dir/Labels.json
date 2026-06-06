@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/esp-idf-sys-fd3c89afb5648272/out/build/CMakeFiles/bootloader"
+		},
+		{
+			"file" : "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/esp-idf-sys-fd3c89afb5648272/out/build/CMakeFiles/bootloader.rule"
+		},
+		{
+			"file" : "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/esp-idf-sys-fd3c89afb5648272/out/build/CMakeFiles/bootloader-complete.rule"
+		},
+		{
+			"file" : "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/esp-idf-sys-fd3c89afb5648272/out/build/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule"
+		},
+		{
+			"file" : "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/esp-idf-sys-fd3c89afb5648272/out/build/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule"
+		},
+		{
+			"file" : "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/esp-idf-sys-fd3c89afb5648272/out/build/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule"
+		},
+		{
+			"file" : "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/esp-idf-sys-fd3c89afb5648272/out/build/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule"
+		},
+		{
+			"file" : "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/esp-idf-sys-fd3c89afb5648272/out/build/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule"
+		},
+		{
+			"file" : "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/esp-idf-sys-fd3c89afb5648272/out/build/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule"
+		},
+		{
+			"file" : "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/esp-idf-sys-fd3c89afb5648272/out/build/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"bootloader"
+		],
+		"name" : "bootloader"
+	}
+}

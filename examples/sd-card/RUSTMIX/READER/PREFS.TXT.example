@@ -1,0 +1,10 @@
+# RustMix Wave Reader preferences
+# The Reader creates /RUSTMIX/READER/PREFS.TXT automatically after a change.
+# book_font values: inter | atkinson-hyperlegible | serif | literata
+version=1
+theme=classic
+orientation=portrait
+font_size=medium
+book_font=serif
+paragraph_alignment=justified
+show_progress=true

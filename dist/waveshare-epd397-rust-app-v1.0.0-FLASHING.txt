@@ -1,0 +1,22 @@
+Rustmix Wave firmware release v1.0.0
+
+Supported release flashing path (ELF-aware):
+
+  ./waveshare-epd397-rust-app-v1.0.0-flash-release.sh waveshare-epd397-rust-app-v1.0.0.elf
+
+Equivalent direct command:
+
+  espflash flash --chip esp32s3 --monitor waveshare-epd397-rust-app-v1.0.0.elf
+
+Development flashing with monitor remains available from the source tree:
+
+  ./scripts/flash.sh monitor
+
+SAFETY WARNING
+--------------
+Do not flash this release with espflash write-bin.
+The write-bin command is a raw-address operation. This release bundle intentionally
+ships no *-flash.bin artifact and does not define a supported raw address layout.
+
+A merged factory-image workflow may be added later only after the bootloader,
+partition-table, and application offsets have been validated on physical hardware.

@@ -1,0 +1,6 @@
+RustMix Wave Reader TXT persistence foundation
+
+Copy .TXT books into /RUSTMIX/BOOKS on the SD card.
+UTF-8, UTF-8 BOM and Windows-1252 fallback are supported.
+
+Reader state, recent books, bookmarks and page-anchor caches are created automatically under /RUSTMIX/READER.

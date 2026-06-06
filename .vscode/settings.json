@@ -1,0 +1,13 @@
+{
+  "rust-analyzer.cargo.target": "xtensa-esp32s3-espidf",
+  "rust-analyzer.check.allTargets": false,
+  "rust-analyzer.check.command": "check",
+  "rust-analyzer.cargo.extraEnv": {
+    "MCU": "esp32s3",
+    "ESP_IDF_VERSION": "v5.4.3",
+    "ESP_IDF_TOOLS_INSTALL_DIR": "global"
+  },
+  "editor.formatOnSave": true,
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true
+}

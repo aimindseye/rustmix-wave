@@ -1,0 +1,3 @@
+# Personal calendar events. Format: YYYY-MM-DD|Title|Optional detail
+2026-06-01|Calendar Follow-up|Add month navigation after basic app proof.
+2026-12-31|Year Review|Review Rustmix app usefulness.

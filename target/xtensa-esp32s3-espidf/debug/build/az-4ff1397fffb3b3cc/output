@@ -1,0 +1,6 @@
+$ mkdir -p "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/az-4ff1397fffb3b3cc/out/try_track_caller"
+$ cd "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/az-4ff1397fffb3b3cc/out/try_track_caller"
+$ printf '%s' "// try_tra"... > "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/az-4ff1397fffb3b3cc/out/try_track_caller/try_track_caller.rs"
+$ cd "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/az-4ff1397fffb3b3cc/out/try_track_caller" && "rustc" "try_track_caller.rs" "--emit=dep-info,metadata" >& /dev/null
+cargo:rustc-cfg=track_caller
+$ rm -r "/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/debug/build/az-4ff1397fffb3b3cc/out/try_track_caller"

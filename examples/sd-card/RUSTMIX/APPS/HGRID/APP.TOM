@@ -1,0 +1,6 @@
+id = "hello_grid"
+name = "Hello Grid"
+kind = "game"
+entry = "MAIN.LUA"
+version = "1.0"
+input = ["rotary", "select", "back"]

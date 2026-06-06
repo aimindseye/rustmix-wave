@@ -1,0 +1,6 @@
+id = "tilt_maze"
+name = "Tilt Maze"
+kind = "game"
+entry = "MAIN.LUA"
+version = "1.0"
+input = ["imu", "select", "back"]

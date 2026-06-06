@@ -1,0 +1,6 @@
+id = "sudoku"
+name = "Sudoku"
+kind = "game"
+entry = "MAIN.LUA"
+version = "1.0"
+input = ["rotary", "select", "back"]

@@ -1,0 +1,6 @@
+# Copy this file to /RUSTMIX/WIFI.TXT on the FAT-formatted SD card.
+# Edit it locally. Do not commit or share your real password.
+ssid=YOUR_NETWORK
+password=YOUR_PASSWORD
+timezone=America/New_York
+ntp_server=pool.ntp.org

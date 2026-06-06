@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Format, source contract, and host tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust with rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: true
+
+      - name: Check shell syntax
+        run: bash -n scripts/*.sh
+
+      - name: Check stable formatting
+        run: cargo +stable fmt --all -- --check
+
+      - name: Validate cleaned repository contract
+        run: ./scripts/validate_source_contract.sh
+
+      - name: Run native-target host tests
+        run: ./scripts/test-host.sh
+
+      - name: Verify ELF-only release workflow
+        run: ./scripts/test-release-flash-workflow.sh

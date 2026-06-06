@@ -1,0 +1,10 @@
+/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/debug/deps/thiserror-fb0a2e59f8080e97.d: /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/lib.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/aserror.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/display.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/provide.rs
+
+/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/debug/deps/libthiserror-fb0a2e59f8080e97.rlib: /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/lib.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/aserror.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/display.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/provide.rs
+
+/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/debug/deps/libthiserror-fb0a2e59f8080e97.rmeta: /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/lib.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/aserror.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/display.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/provide.rs
+
+/Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/lib.rs:
+/Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/aserror.rs:
+/Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/display.rs:
+/Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-1.0.69/src/provide.rs:

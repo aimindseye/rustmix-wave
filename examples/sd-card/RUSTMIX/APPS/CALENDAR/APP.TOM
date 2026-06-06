@@ -1,0 +1,7 @@
+id = "calendar"
+name = "Calendar"
+category = "Productivity"
+type = "activity"
+version = "0.1.0"
+entry = "MAIN.LUA"
+capabilities = ["display", "input", "storage", "time"]

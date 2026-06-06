@@ -1,0 +1,14 @@
+# U.S. calendar events for native Rustmix-Wave Calendar.
+# Format: YYYY-MM-DD|Category|Title|Detail
+# Source basis: Rustmix X4 US2026.TXT pack.
+2026-01-01|US|New Year's Day|Federal holiday
+2026-01-19|US|Martin Luther King Jr. Day|Federal holiday
+2026-02-16|US|Washington's Birthday|Federal holiday
+2026-05-25|US|Memorial Day|Federal holiday
+2026-06-19|US|Juneteenth|Federal holiday
+2026-07-03|US|Independence Day observed|Federal holiday
+2026-09-07|US|Labor Day|Federal holiday
+2026-10-12|US|Columbus Day|Federal holiday
+2026-11-11|US|Veterans Day|Federal holiday
+2026-11-26|US|Thanksgiving Day|Federal holiday
+2026-12-25|US|Christmas Day|Federal holiday

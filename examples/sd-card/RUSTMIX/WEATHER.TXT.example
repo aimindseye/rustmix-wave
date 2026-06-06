@@ -1,0 +1,7 @@
+# Open-Meteo weather configuration. No API key is required for this milestone.
+provider=open-meteo
+location=New York, NY
+latitude=40.7128
+longitude=-74.0060
+timezone=America/New_York
+refresh_minutes=30

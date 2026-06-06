@@ -1,0 +1,2 @@
+source /Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-7fc193931b9b89e0/out/build/bootloader/gdbinit/symbols
+source /Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-7fc193931b9b89e0/out/build/bootloader/gdbinit/connect

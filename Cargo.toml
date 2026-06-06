@@ -1,0 +1,38 @@
+[package]
+name = "waveshare-epd397-rust-app"
+version = "1.0.0"
+authors = ["Piyush Daiya"]
+edition = "2021"
+resolver = "2"
+rust-version = "1.82"
+description = "RustMix Wave product firmware for the Waveshare ESP32-S3 e-Paper 3.97 board: portrait dashboard, RTC alarms, Reader TXT and reflowable EPUB support, SD Lua apps, native dirty-region game canvas, explicit Wi-Fi SD file-transfer portal, per-book resume, preferences, bookmarks, Calendar, native X4-pack Dictionary, U.S. Calendar agenda and personal event editor, Unit Converter, audio, weather, sensors and SD browsing"
+license = "MIT"
+
+[[bin]]
+name = "waveshare-epd397-rust-app"
+harness = false
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+
+[dependencies]
+anyhow = "1"
+embedded-graphics = "0.8.1"
+embedded-hal = "1.0"
+log = "0.4"
+miniz_oxide = "0.8"
+
+[target.'cfg(target_os = "espidf")'.dependencies]
+embedded-svc = "0.29"
+esp-idf-svc = "0.52.1"
+es8311 = "0.1.0"
+
+[build-dependencies]
+embuild = { version = "0.33", features = ["espidf"] }

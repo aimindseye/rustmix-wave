@@ -1,0 +1,9 @@
+/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/release/build/clang-sys-306ad0f4d6cf6c29/build_script_build-306ad0f4d6cf6c29.d: /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build/macros.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build/common.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build/dynamic.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build/static.rs
+
+/Users/piyushdaiya/Documents/projects/waveshare-epd397-rust-app/target/release/build/clang-sys-306ad0f4d6cf6c29/build_script_build-306ad0f4d6cf6c29: /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build/macros.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build/common.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build/dynamic.rs /Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build/static.rs
+
+/Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build.rs:
+/Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build/macros.rs:
+/Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build/common.rs:
+/Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build/dynamic.rs:
+/Users/piyushdaiya/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clang-sys-1.8.1/build/static.rs:

@@ -1,0 +1,2 @@
+-- SD-loaded Sudoku declaration. Mutable state and validation remain native.
+sudoku.init("530070000600195000098000060800060003400803001700020006060000280000419005000080079")

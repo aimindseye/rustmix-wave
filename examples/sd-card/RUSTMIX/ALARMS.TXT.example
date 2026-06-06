@@ -1,0 +1,9 @@
+# RTC alarm schedules loaded at boot from /RUSTMIX/ALARMS.TXT.
+# Persistent edits are made off-device; the product UI edits runtime state only.
+# Format: alarm=name,HH:MM,schedule,on|off,recurring|once
+# Recurring schedule values: daily, weekdays, weekends, or sun|mon|...|sat
+# One-time schedule value: YYYY-MM-DD
+snooze_minutes=10
+alarm=Workday,07:30,weekdays,on,recurring
+alarm=Weekend,09:00,weekends,off,recurring
+alarm=Appointment,16:45,2026-06-10,on,once

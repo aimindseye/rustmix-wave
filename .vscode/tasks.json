@@ -1,0 +1,43 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Rust: format check",
+      "type": "shell",
+      "command": "cargo +stable fmt --all -- --check",
+      "problemMatcher": []
+    },
+    {
+      "label": "Rust: host unit tests",
+      "type": "shell",
+      "command": "./scripts/test-host.sh",
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "Rust: build release",
+      "type": "shell",
+      "command": "cargo +esp build --release",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "Rust: flash and monitor",
+      "type": "shell",
+      "command": "cargo +esp run --release",
+      "problemMatcher": []
+    },
+    {
+      "label": "Project: validate",
+      "type": "shell",
+      "command": "./scripts/validate.sh",
+      "problemMatcher": []
+    }
+  ]
+}
