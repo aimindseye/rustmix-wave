@@ -1,0 +1,30 @@
+# Rust / ESP-IDF build outputs
+/target/
+/.embuild/
+
+# Generated releases
+/dist/
+*.zip
+*.sha256
+*.bin
+*.elf
+
+# Python helper caches
+**/__pycache__/
+*.py[cod]
+
+# Local editor / OS files
+.DS_Store
+*.swp
+*.swo
+*.orig
+*.rej
+*.bak
+
+# Local environment files
+.env
+.env.*
+
+# Extracted patch overlays must not be committed
+/waveshare-epd397-rust-*-repair-*/
+/waveshare-epd397-rust-*-v*/
