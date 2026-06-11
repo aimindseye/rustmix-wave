@@ -29,6 +29,9 @@ jobs:
       - name: Check shell syntax
         run: bash -n scripts/*.sh
 
+      - name: Check Python helper syntax
+        run: python3 -c "import ast, pathlib; [ast.parse(pathlib.Path(path).read_text()) for path in ('scripts/extract-epub-font-corpus.py', 'scripts/audit-indic-epub-fixture.py')]"
+
       - name: Check stable formatting
         run: cargo +stable fmt --all -- --check
 
@@ -38,5 +41,11 @@ jobs:
       - name: Run native-target host tests
         run: ./scripts/test-host.sh
 
+      - name: Verify Cargo target-directory aware flashing
+        run: ./scripts/test-flash-target-resolution.sh
+
       - name: Verify ELF-only release workflow
         run: ./scripts/test-release-flash-workflow.sh
+
+      - name: Verify Indic font-pack workflow
+        run: ./scripts/test-indic-font-pack-workflow.sh

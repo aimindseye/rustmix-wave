@@ -36,6 +36,17 @@ Ordinary development flashing remains unchanged:
 ./scripts/flash.sh monitor
 ```
 
+
+## Explicit Xtensa target safety
+
+The development flasher and release builder force:
+
+```bash
+cargo +esp build -Z build-std=std,panic_abort --release --target xtensa-esp32s3-espidf
+```
+
+They then select Cargo's `compiler-artifact.executable` only when its path is rooted under the requested `xtensa-esp32s3-espidf` target directory. A host artifact such as `target/release/waveshare-epd397-rust-app` is rejected because it is not an ESP-IDF firmware ELF and does not contain the ESP-IDF application descriptor required by `espflash`.
+
 ## Safety warning: do not use raw-address flashing
 
 Do **not** use `espflash write-bin` for the release ELF or for any artifact from
@@ -69,7 +80,7 @@ installation method.
 The script:
 
 1. Runs `./scripts/validate.sh` unless `--skip-validate` is provided.
-2. Builds the embedded release ELF with `cargo +esp build --release`.
+2. Builds the embedded release ELF with an explicit `cargo +esp build -Z build-std=std,panic_abort --release --target xtensa-esp32s3-espidf` target through `scripts/resolve-built-elf.sh`.
 3. Copies the ELF into `dist/`.
 4. Copies the safe `flash-release.sh` helper into `dist/`.
 5. Writes SHA-256 checksums.
@@ -97,6 +108,10 @@ No `*-flash.bin` artifact is generated.
 Use this only after the exact source tree has already passed
 `./scripts/validate.sh`.
 
+## Optional Indic Reader font packs
+
+The ELF release does not embed or redistribute raw Noto font files. Generate Devanagari and Gujarati `.RWF` packs locally with `tools/font-builder/index.html`, then install them under `/RUSTMIX/FONTS`. See [`UNICODE_FONTS.md`](UNICODE_FONTS.md).
+
 ## Package cleaned source
 
 ```bash
@@ -112,3 +127,9 @@ dist/waveshare-epd397-rust-app-v<VERSION>-github-ready.zip.sha256
 
 The source package excludes Git metadata, build outputs, generated release
 artifacts, local caches, patch scratch files, and extracted overlay directories.
+## Cargo target-directory safety
+
+The development flash script and release builder resolve the compiled ESP32-S3 ELF from Cargo's authoritative `compiler-artifact.executable` JSON field. They do not reconstruct an assumed path from `target_directory`. This remains correct when Cargo uses a redirected target directory, a workspace setting, a nonstandard artifact layout, or a hashed executable path. Flashing a hard-coded stale ELF can make a successful source build appear to have no effect on hardware.
+
+After `./scripts/flash.sh monitor`, verify the reported `development-flash-elf=<path>` and the boot marker version.
+

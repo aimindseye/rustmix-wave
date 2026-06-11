@@ -1,6 +1,6 @@
 # Rustmix Wave user guide
 
-This guide describes the Rustmix Wave v1.0.0 user interface as shown by the reference screenshots under [`/screenshots`](../screenshots/). The firmware targets the Waveshare ESP32-S3 3.97-inch e-paper board and uses a rotary-first interaction model.
+This guide describes the Rustmix Wave v1.1.0 user interface as shown by the reference screenshots under [`/screenshots`](../screenshots/). The firmware targets the Waveshare ESP32-S3 3.97-inch e-paper board and uses a rotary-first interaction model.
 
 ## Physical controls
 
@@ -122,6 +122,16 @@ The EPUB TOC lists chapter entries. Rotate to choose a chapter, SELECT to open i
 </table>
 
 Bookmarks retain byte-offset anchors as the authoritative jump target. EPUB rows show chapter-relative labels when available; TXT rows show page labels. Rotate to choose a saved anchor, SELECT to open it, and hold BOOT to return.
+
+### Devanagari and Gujarati EPUB text
+
+When optional `/RUSTMIX/FONTS` packs are installed, EPUB Reader pages render Devanagari and Gujarati shaped clusters generated locally from **Noto Sans Devanagari Regular** and **Noto Sans Gujarati Regular** files. Large EPUB sessions open first-page-first, build page anchors lazily, and stream only the visible-page `.RWF` glyph subset from SD. A `FONT?` badge means the current book needs an SD font pack. See [`UNICODE_FONTS.md`](UNICODE_FONTS.md).
+
+<table>
+<tr><td><img src="../screenshots/epub-devanagari-bhagavat.jpg" width="260" alt="Large Hindi and Sanskrit Bhagavat EPUB"></td><td><img src="../screenshots/epub-devanagari-garud-puran.jpg" width="260" alt="Hindi Garud Puran EPUB"></td><td><img src="../screenshots/epub-gujarati-valmiki-ramayan.jpg" width="260" alt="Gujarati Valmiki Ramayan EPUB"></td></tr>
+</table>
+
+The three pages above were physically verified on the Waveshare ESP32-S3 3.97-inch board. Use the browser font builder threshold `160` as the balanced starting point; regenerate with a higher threshold when a lighter 1-bit page is preferred.
 
 ## 3. Productivity
 
@@ -505,6 +515,9 @@ Every supplied screenshot is stored in the repository so the guide and README ca
 | [library-bookmarks.jpg](../screenshots/library-bookmarks.jpg) | Library Bookmarks tab |
 | [txt-reader.jpg](../screenshots/txt-reader.jpg) | TXT Reader page |
 | [epub-reader.jpg](../screenshots/epub-reader.jpg) | EPUB Reader page |
+| [epub-devanagari-bhagavat.jpg](../screenshots/epub-devanagari-bhagavat.jpg) | Large Hindi / Sanskrit Bhagavat EPUB |
+| [epub-devanagari-garud-puran.jpg](../screenshots/epub-devanagari-garud-puran.jpg) | Hindi Garud Puran EPUB |
+| [epub-gujarati-valmiki-ramayan.jpg](../screenshots/epub-gujarati-valmiki-ramayan.jpg) | Gujarati Valmiki Ramayan EPUB |
 | [txt-reader-options.jpg](../screenshots/txt-reader-options.jpg) | TXT Reader Options |
 | [epub-reader-options.jpg](../screenshots/epub-reader-options.jpg) | EPUB Reader Options |
 | [reader-reading-prefs.jpg](../screenshots/reader-reading-prefs.jpg) | Reading Preferences |

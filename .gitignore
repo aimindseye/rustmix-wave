@@ -28,3 +28,21 @@
 # Extracted patch overlays must not be committed
 /waveshare-epd397-rust-*-repair-*/
 /waveshare-epd397-rust-*-v*/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
+
+# Rust build output
+target/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
+
+# Local command-output captures
+git.txt
+
+# Python cache
+__pycache__/
+*.pyc

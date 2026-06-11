@@ -26,11 +26,11 @@ case "$#" in
     ;;
 esac
 
-BIN="target/xtensa-esp32s3-espidf/release/waveshare-epd397-rust-app"
-cargo +esp build --release
+ELF="$(./scripts/resolve-built-elf.sh)"
+echo "development-flash-elf=$ELF"
 
 if [[ -n "$PORT" ]]; then
-  exec espflash flash --chip esp32s3 --port "$PORT" --monitor "$BIN"
+  exec espflash flash --chip esp32s3 --port "$PORT" --monitor "$ELF"
 else
-  exec espflash flash --chip esp32s3 --monitor "$BIN"
+  exec espflash flash --chip esp32s3 --monitor "$ELF"
 fi

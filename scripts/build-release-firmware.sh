@@ -20,19 +20,14 @@ else
   echo 'release-firmware-validation=skipped'
 fi
 
-cargo +esp build --release
-
 VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
 if [[ -z "$VERSION" ]]; then
   echo 'release-firmware-build=failed error=unable-to-determine-version' >&2
   exit 1
 fi
 
-ELF_SOURCE="target/xtensa-esp32s3-espidf/release/waveshare-epd397-rust-app"
-if [[ ! -f "$ELF_SOURCE" ]]; then
-  echo "release-firmware-build=failed error=missing-release-elf path=$ELF_SOURCE" >&2
-  exit 1
-fi
+ELF_SOURCE="$(./scripts/resolve-built-elf.sh)"
+echo "release-firmware-source-elf=$ELF_SOURCE"
 
 mkdir -p dist
 PREFIX="dist/waveshare-epd397-rust-app-v${VERSION}"

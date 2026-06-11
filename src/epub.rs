@@ -3,6 +3,8 @@
 // rustmix-wave=epub-parser-stack-isolation-ready
 // rustmix-wave=epub-chapter-aware-presentation-ready
 // rustmix-wave=epub-watchdog-memory-pressure-repair-ready
+// rustmix-wave=epub-large-archive-file-backed-repair-ready
+// rustmix-wave=epub-parser-adaptive-stack-ready
 //! Bounded reflowable EPUB reader foundation.
 //!
 //! The embedded target keeps EPUB processing deliberately small and explicit:
@@ -12,29 +14,44 @@
 //! NCX records become a compact table of contents. Images, CSS layout and
 //! interactive links remain deferred.
 
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs::{self, File},
+    io::{Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
+};
 
 use miniz_oxide::inflate::decompress_to_vec;
 
-/// Maximum EPUB archive bytes accepted from removable storage.
-pub const EPUB_ARCHIVE_BYTES_LIMIT: usize = 16 * 1024 * 1024;
+/// Maximum EPUB archive bytes accepted from removable storage. The parser
+/// reads ZIP metadata and selected members from the file instead of retaining
+/// the complete archive in RAM.
+pub const EPUB_ARCHIVE_BYTES_LIMIT: u64 = 64 * 1024 * 1024;
+/// Maximum central-directory bytes retained while inspecting one EPUB.
+pub const EPUB_CENTRAL_DIRECTORY_BYTES_LIMIT: usize = 2 * 1024 * 1024;
 /// Maximum central-directory records accepted from one EPUB.
-pub const EPUB_ARCHIVE_ENTRY_LIMIT: usize = 512;
+pub const EPUB_ARCHIVE_ENTRY_LIMIT: usize = 4096;
 /// Maximum compressed bytes extracted for one EPUB member.
 pub const EPUB_MEMBER_COMPRESSED_LIMIT: usize = 2 * 1024 * 1024;
 /// Maximum decompressed bytes extracted for one EPUB member.
 pub const EPUB_MEMBER_UNCOMPRESSED_LIMIT: usize = 4 * 1024 * 1024;
 /// Maximum flattened reflowable text retained in RAM for one EPUB.
-pub const EPUB_REFLOW_TEXT_LIMIT: usize = 2 * 1024 * 1024;
+pub const EPUB_REFLOW_TEXT_LIMIT: usize = 7 * 1024 * 1024;
 /// Maximum manifest records retained from one OPF package.
-pub const EPUB_MANIFEST_LIMIT: usize = 256;
+pub const EPUB_MANIFEST_LIMIT: usize = 4096;
 /// Maximum spine records retained from one OPF package.
-pub const EPUB_SPINE_LIMIT: usize = 128;
+pub const EPUB_SPINE_LIMIT: usize = 4096;
 /// Maximum TOC records rendered by the Reader UI.
 pub const EPUB_TOC_LIMIT: usize = 128;
-/// Dedicated parser-worker stack budget. Real EPUB DEFLATE and XHTML work
+/// Preferred parser-worker stack budget. Real EPUB DEFLATE and XHTML work
 /// must not run on the 16 KB firmware main task.
-pub const EPUB_PARSER_WORKER_STACK_BYTES: usize = 64 * 1024;
+pub const EPUB_PARSER_WORKER_STACK_BYTES: usize = 48 * 1024;
+/// Fragmentation-aware parser-worker fallback used only when the preferred
+/// stack cannot fit after Wi-Fi, TLS and bounded Library activity.
+pub const EPUB_PARSER_WORKER_FALLBACK_STACK_BYTES: usize = 32 * 1024;
+/// Extra contiguous internal-heap margin reserved for pthread bookkeeping
+/// when starting the short-lived parser task after network initialization.
+pub const EPUB_PARSER_WORKER_STACK_GUARD_BYTES: usize = 4 * 1024;
 /// Lightweight OPF-title worker stack budget. Library scans only read bounded
 /// ZIP metadata and must not reserve the full parser stack for each title.
 pub const EPUB_TITLE_WORKER_STACK_BYTES: usize = 32 * 1024;
@@ -99,55 +116,78 @@ struct ZipEntry {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ZipArchive {
-    bytes: Vec<u8>,
+    path: PathBuf,
+    archive_len: u64,
     entries: Vec<ZipEntry>,
 }
 
 impl ZipArchive {
     fn open(path: impl AsRef<Path>) -> Result<Self, String> {
-        let bytes =
-            fs::read(path.as_ref()).map_err(|error| format!("EPUB open failed: {error}"))?;
-        if bytes.len() > EPUB_ARCHIVE_BYTES_LIMIT {
+        let path = path.as_ref().to_path_buf();
+        let archive_len = fs::metadata(&path)
+            .map_err(|error| format!("EPUB metadata failed: {error}"))?
+            .len();
+        if archive_len > EPUB_ARCHIVE_BYTES_LIMIT {
             return Err(format!(
                 "EPUB archive exceeds {} byte limit",
                 EPUB_ARCHIVE_BYTES_LIMIT
             ));
         }
-        let eocd = find_eocd(&bytes).ok_or_else(|| "EPUB ZIP end record missing".to_string())?;
-        let entry_count = read_u16(&bytes, eocd + 10)? as usize;
-        let central_size = read_u32(&bytes, eocd + 12)? as usize;
-        let central_offset = read_u32(&bytes, eocd + 16)? as usize;
+        let mut file = File::open(&path).map_err(|error| format!("EPUB open failed: {error}"))?;
+        let tail_len = usize::try_from(archive_len.min(65_557))
+            .map_err(|_| "EPUB ZIP tail exceeds platform range".to_string())?;
+        let tail_start = archive_len.saturating_sub(tail_len as u64);
+        file.seek(SeekFrom::Start(tail_start))
+            .map_err(|error| format!("EPUB ZIP tail seek failed: {error}"))?;
+        let mut tail = vec![0_u8; tail_len];
+        file.read_exact(&mut tail)
+            .map_err(|error| format!("EPUB ZIP tail read failed: {error}"))?;
+        let eocd = find_eocd(&tail).ok_or_else(|| "EPUB ZIP end record missing".to_string())?;
+        let entry_count = read_u16(&tail, eocd + 10)? as usize;
+        let central_size = read_u32(&tail, eocd + 12)? as usize;
+        let central_offset = read_u32(&tail, eocd + 16)? as usize;
         if entry_count > EPUB_ARCHIVE_ENTRY_LIMIT {
             return Err(format!("EPUB ZIP has too many entries: {entry_count}"));
+        }
+        if central_size > EPUB_CENTRAL_DIRECTORY_BYTES_LIMIT {
+            return Err(format!(
+                "EPUB ZIP directory exceeds {} byte limit",
+                EPUB_CENTRAL_DIRECTORY_BYTES_LIMIT
+            ));
         }
         let central_end = central_offset
             .checked_add(central_size)
             .ok_or_else(|| "EPUB ZIP directory overflow".to_string())?;
-        if central_end > bytes.len() {
+        if central_end as u64 > archive_len {
             return Err("EPUB ZIP directory exceeds archive".into());
         }
-        let mut entries = Vec::new();
-        let mut cursor = central_offset;
+        file.seek(SeekFrom::Start(central_offset as u64))
+            .map_err(|error| format!("EPUB ZIP directory seek failed: {error}"))?;
+        let mut central = vec![0_u8; central_size];
+        file.read_exact(&mut central)
+            .map_err(|error| format!("EPUB ZIP directory read failed: {error}"))?;
+        let mut entries = Vec::with_capacity(entry_count);
+        let mut cursor = 0;
         for _ in 0..entry_count {
-            if read_u32(&bytes, cursor)? != 0x0201_4B50 {
+            if read_u32(&central, cursor)? != 0x0201_4B50 {
                 return Err("EPUB ZIP central record signature mismatch".into());
             }
-            let flags = read_u16(&bytes, cursor + 8)?;
-            let method = read_u16(&bytes, cursor + 10)?;
-            let compressed_size = read_u32(&bytes, cursor + 20)? as usize;
-            let uncompressed_size = read_u32(&bytes, cursor + 24)? as usize;
-            let name_len = read_u16(&bytes, cursor + 28)? as usize;
-            let extra_len = read_u16(&bytes, cursor + 30)? as usize;
-            let comment_len = read_u16(&bytes, cursor + 32)? as usize;
-            let local_header_offset = read_u32(&bytes, cursor + 42)? as usize;
+            let flags = read_u16(&central, cursor + 8)?;
+            let method = read_u16(&central, cursor + 10)?;
+            let compressed_size = read_u32(&central, cursor + 20)? as usize;
+            let uncompressed_size = read_u32(&central, cursor + 24)? as usize;
+            let name_len = read_u16(&central, cursor + 28)? as usize;
+            let extra_len = read_u16(&central, cursor + 30)? as usize;
+            let comment_len = read_u16(&central, cursor + 32)? as usize;
+            let local_header_offset = read_u32(&central, cursor + 42)? as usize;
             let name_start = cursor + 46;
             let name_end = name_start
                 .checked_add(name_len)
                 .ok_or_else(|| "EPUB ZIP filename overflow".to_string())?;
-            if name_end > central_end {
+            if name_end > central.len() {
                 return Err("EPUB ZIP filename exceeds directory".into());
             }
-            let name = String::from_utf8_lossy(&bytes[name_start..name_end]).replace('\\', "/");
+            let name = String::from_utf8_lossy(&central[name_start..name_end]).replace('\\', "/");
             entries.push(ZipEntry {
                 name,
                 flags,
@@ -160,11 +200,15 @@ impl ZipArchive {
                 .checked_add(extra_len)
                 .and_then(|value| value.checked_add(comment_len))
                 .ok_or_else(|| "EPUB ZIP central record overflow".to_string())?;
-            if cursor > central_end {
+            if cursor > central.len() {
                 return Err("EPUB ZIP central record exceeds directory".into());
             }
         }
-        Ok(Self { bytes, entries })
+        Ok(Self {
+            path,
+            archive_len,
+            entries,
+        })
     }
 
     fn entry(&self, name: &str) -> Option<&ZipEntry> {
@@ -201,11 +245,18 @@ impl ZipArchive {
             ));
         }
         let offset = entry.local_header_offset;
-        if read_u32(&self.bytes, offset)? != 0x0403_4B50 {
+        let mut file =
+            File::open(&self.path).map_err(|error| format!("EPUB member open failed: {error}"))?;
+        file.seek(SeekFrom::Start(offset as u64))
+            .map_err(|error| format!("EPUB member seek failed: {error}"))?;
+        let mut local_header = [0_u8; 30];
+        file.read_exact(&mut local_header)
+            .map_err(|error| format!("EPUB local ZIP header read failed: {error}"))?;
+        if read_u32(&local_header, 0)? != 0x0403_4B50 {
             return Err(format!("EPUB local ZIP header mismatch: {}", entry.name));
         }
-        let name_len = read_u16(&self.bytes, offset + 26)? as usize;
-        let extra_len = read_u16(&self.bytes, offset + 28)? as usize;
+        let name_len = read_u16(&local_header, 26)? as usize;
+        let extra_len = read_u16(&local_header, 28)? as usize;
         let data_start = offset
             .checked_add(30)
             .and_then(|value| value.checked_add(name_len))
@@ -214,13 +265,17 @@ impl ZipArchive {
         let data_end = data_start
             .checked_add(entry.compressed_size)
             .ok_or_else(|| "EPUB ZIP member overflow".to_string())?;
-        if data_end > self.bytes.len() {
+        if data_end as u64 > self.archive_len {
             return Err(format!("EPUB ZIP member exceeds archive: {}", entry.name));
         }
-        let compressed = &self.bytes[data_start..data_end];
+        file.seek(SeekFrom::Start(data_start as u64))
+            .map_err(|error| format!("EPUB ZIP member data seek failed: {error}"))?;
+        let mut compressed = vec![0_u8; entry.compressed_size];
+        file.read_exact(&mut compressed)
+            .map_err(|error| format!("EPUB ZIP member read failed: {error}"))?;
         let output = match entry.method {
-            0 => compressed.to_vec(),
-            8 => decompress_to_vec(compressed)
+            0 => compressed,
+            8 => decompress_to_vec(&compressed)
                 .map_err(|error| format!("EPUB deflate failed for {}: {error:?}", entry.name))?,
             method => {
                 return Err(format!(
@@ -247,19 +302,52 @@ struct ManifestItem {
     properties: String,
 }
 
+#[must_use]
+fn epub_parser_worker_stack_bytes(largest_internal_block_bytes: usize) -> Option<usize> {
+    if largest_internal_block_bytes == 0
+        || largest_internal_block_bytes
+            >= EPUB_PARSER_WORKER_STACK_BYTES + EPUB_PARSER_WORKER_STACK_GUARD_BYTES
+    {
+        return Some(EPUB_PARSER_WORKER_STACK_BYTES);
+    }
+    if largest_internal_block_bytes
+        >= EPUB_PARSER_WORKER_FALLBACK_STACK_BYTES + EPUB_PARSER_WORKER_STACK_GUARD_BYTES
+    {
+        return Some(EPUB_PARSER_WORKER_FALLBACK_STACK_BYTES);
+    }
+    None
+}
+
 /// Parse one EPUB on a short-lived dedicated worker stack. The Reader keeps
 /// its existing synchronous staged-loading contract, while archive parsing,
 /// DEFLATE expansion and XHTML flattening no longer consume the firmware main
 /// task's 16 KB stack budget.
 pub fn open_epub_on_worker(path: impl AsRef<Path>) -> Result<EpubDocument, String> {
     let path = path.as_ref().to_path_buf();
+    let memory = crate::runtime_memory::RuntimeMemorySnapshot::capture();
+    let Some(worker_stack_bytes) =
+        epub_parser_worker_stack_bytes(memory.heap_largest_internal_block_bytes)
+    else {
+        let message = format!(
+            "EPUB parser worker needs at least {} contiguous internal bytes; largest block is {}",
+            EPUB_PARSER_WORKER_FALLBACK_STACK_BYTES + EPUB_PARSER_WORKER_STACK_GUARD_BYTES,
+            memory.heap_largest_internal_block_bytes
+        );
+        log::warn!("rustmix-wave=epub-parser-worker status=preflight-failed error={message}");
+        return Err(message);
+    };
     log::info!(
-        "rustmix-wave=epub-parser-worker status=starting stack-bytes={}",
-        EPUB_PARSER_WORKER_STACK_BYTES
+        "rustmix-wave=epub-parser-worker status=starting stack-bytes={} preferred-stack-bytes={} fallback-stack-bytes={} guard-bytes={} largest-internal-block-bytes={}",
+        worker_stack_bytes,
+        EPUB_PARSER_WORKER_STACK_BYTES,
+        EPUB_PARSER_WORKER_FALLBACK_STACK_BYTES,
+        EPUB_PARSER_WORKER_STACK_GUARD_BYTES,
+        memory.heap_largest_internal_block_bytes
     );
+    crate::runtime_memory::log_runtime_memory("before-worker-epub-parser");
     let worker = std::thread::Builder::new()
         .name("epub-parser".into())
-        .stack_size(EPUB_PARSER_WORKER_STACK_BYTES)
+        .stack_size(worker_stack_bytes)
         .spawn(move || open_epub(path))
         .map_err(|error| {
             let message = format!("EPUB parser worker start failed: {error}");
@@ -271,6 +359,7 @@ pub fn open_epub_on_worker(path: impl AsRef<Path>) -> Result<EpubDocument, Strin
         log::warn!("rustmix-wave=epub-parser-worker status=panicked");
         message
     })?;
+    crate::runtime_memory::log_runtime_memory("after-worker-epub-parser");
     match &result {
         Ok(document) => log::info!(
             "rustmix-wave=epub-parser-worker status=completed spine-items={} toc-entries={} text-bytes={}",
@@ -336,16 +425,35 @@ pub fn open_epub(path: impl AsRef<Path>) -> Result<EpubDocument, String> {
         return Err("EPUB spine is empty".into());
     }
 
-    let mut text = String::new();
+    let reserve = estimated_reflow_capacity(&archive, &manifest, &spine_ids, &package_dir);
+    let mut text = String::with_capacity(reserve);
     let mut chapter_offsets = BTreeMap::new();
     let mut chapter_labels = Vec::new();
     let mut chapters = Vec::new();
     for (spine_index, idref) in spine_ids.iter().enumerate() {
-        let item = manifest
-            .get(idref)
-            .ok_or_else(|| format!("EPUB spine item missing from manifest: {idref}"))?;
+        let Some(item) = manifest.get(idref) else {
+            log::warn!(
+                "rustmix-wave=epub-spine-item action=skip reason=missing-manifest idref={idref}"
+            );
+            continue;
+        };
+        if !is_reflowable_spine_item(item) {
+            log::info!(
+                "rustmix-wave=epub-spine-item action=skip reason=non-readable idref={idref} href={}",
+                item.href
+            );
+            continue;
+        }
         let member = normalize_archive_path(&package_dir, &item.href);
-        let xhtml = utf8_member(&archive, &member)?;
+        let xhtml = match utf8_member(&archive, &member) {
+            Ok(xhtml) => xhtml,
+            Err(error) => {
+                log::warn!(
+                    "rustmix-wave=epub-spine-item action=skip reason=member-read idref={idref} member={member} error={error}"
+                );
+                continue;
+            }
+        };
         let chapter = html_to_text(&xhtml);
         if chapter.trim().is_empty() {
             continue;
@@ -407,11 +515,16 @@ pub fn open_epub(path: impl AsRef<Path>) -> Result<EpubDocument, String> {
 }
 
 fn parse_manifest(package: &str) -> Result<BTreeMap<String, ManifestItem>, String> {
+    let tags = open_tags(package, "item");
+    if tags.len() > EPUB_MANIFEST_LIMIT {
+        return Err(format!(
+            "EPUB manifest exceeds {} item limit: {}",
+            EPUB_MANIFEST_LIMIT,
+            tags.len()
+        ));
+    }
     let mut manifest = BTreeMap::new();
-    for tag in open_tags(package, "item")
-        .into_iter()
-        .take(EPUB_MANIFEST_LIMIT)
-    {
+    for tag in tags {
         let Some(id) = attribute(tag, "id") else {
             continue;
         };
@@ -437,16 +550,54 @@ fn parse_manifest(package: &str) -> Result<BTreeMap<String, ManifestItem>, Strin
 }
 
 fn parse_spine_ids(package: &str) -> Result<Vec<String>, String> {
+    let tags = open_tags(package, "itemref");
+    if tags.len() > EPUB_SPINE_LIMIT {
+        return Err(format!(
+            "EPUB spine exceeds {} item limit: {}",
+            EPUB_SPINE_LIMIT,
+            tags.len()
+        ));
+    }
     let mut ids = Vec::new();
-    for tag in open_tags(package, "itemref")
-        .into_iter()
-        .take(EPUB_SPINE_LIMIT)
-    {
+    for tag in tags {
         if let Some(idref) = attribute(tag, "idref") {
             ids.push(idref);
         }
     }
     Ok(ids)
+}
+
+fn is_reflowable_spine_item(item: &ManifestItem) -> bool {
+    if item
+        .properties
+        .split_whitespace()
+        .any(|property| property == "nav")
+    {
+        return false;
+    }
+    let href = item.href.to_ascii_lowercase();
+    item.media_type.is_empty()
+        || item.media_type == "application/xhtml+xml"
+        || href.ends_with(".xhtml")
+        || href.ends_with(".html")
+        || href.ends_with(".htm")
+}
+
+fn estimated_reflow_capacity(
+    archive: &ZipArchive,
+    manifest: &BTreeMap<String, ManifestItem>,
+    spine_ids: &[String],
+    package_dir: &str,
+) -> usize {
+    spine_ids
+        .iter()
+        .filter_map(|idref| manifest.get(idref))
+        .filter(|item| is_reflowable_spine_item(item))
+        .filter_map(|item| archive.entry(&normalize_archive_path(package_dir, &item.href)))
+        .fold(0_usize, |total, entry| {
+            total.saturating_add(entry.uncompressed_size)
+        })
+        .min(EPUB_REFLOW_TEXT_LIMIT)
 }
 
 fn parse_navigation_toc(
@@ -943,8 +1094,12 @@ mod tests {
     };
 
     use super::{
-        attribute, first_open_tag, html_to_text, open_epub, open_epub_on_worker,
-        read_epub_title_on_worker, EPUB_PARSER_WORKER_STACK_BYTES, EPUB_TITLE_WORKER_STACK_BYTES,
+        attribute, epub_parser_worker_stack_bytes, first_open_tag, html_to_text, open_epub,
+        open_epub_on_worker, read_epub_title_on_worker, EPUB_ARCHIVE_BYTES_LIMIT,
+        EPUB_ARCHIVE_ENTRY_LIMIT, EPUB_CENTRAL_DIRECTORY_BYTES_LIMIT, EPUB_MANIFEST_LIMIT,
+        EPUB_PARSER_WORKER_FALLBACK_STACK_BYTES, EPUB_PARSER_WORKER_STACK_BYTES,
+        EPUB_PARSER_WORKER_STACK_GUARD_BYTES, EPUB_REFLOW_TEXT_LIMIT, EPUB_SPINE_LIMIT,
+        EPUB_TITLE_WORKER_STACK_BYTES,
     };
 
     fn temp_epub(name: &str) -> PathBuf {
@@ -1038,8 +1193,27 @@ mod tests {
     }
 
     #[test]
+    fn parser_worker_stack_budget_adapts_to_contiguous_internal_heap() {
+        assert_eq!(
+            epub_parser_worker_stack_bytes(64 * 1024),
+            Some(EPUB_PARSER_WORKER_STACK_BYTES)
+        );
+        assert_eq!(
+            epub_parser_worker_stack_bytes(38 * 1024),
+            Some(EPUB_PARSER_WORKER_FALLBACK_STACK_BYTES)
+        );
+        assert_eq!(epub_parser_worker_stack_bytes(35 * 1024), None);
+        assert_eq!(
+            epub_parser_worker_stack_bytes(0),
+            Some(EPUB_PARSER_WORKER_STACK_BYTES)
+        );
+    }
+
+    #[test]
     fn parser_worker_stack_budget_is_explicit() {
-        assert_eq!(EPUB_PARSER_WORKER_STACK_BYTES, 64 * 1024);
+        assert_eq!(EPUB_PARSER_WORKER_STACK_BYTES, 48 * 1024);
+        assert_eq!(EPUB_PARSER_WORKER_FALLBACK_STACK_BYTES, 32 * 1024);
+        assert_eq!(EPUB_PARSER_WORKER_STACK_GUARD_BYTES, 4 * 1024);
     }
 
     #[test]
@@ -1054,6 +1228,81 @@ mod tests {
             html_to_text("<h1>Title</h1><p>Hello &amp; goodbye.</p>"),
             "Title\n\nHello & goodbye."
         );
+    }
+
+    #[test]
+    fn large_archive_limits_cover_supplied_indic_fixture_shape() {
+        assert_eq!(EPUB_ARCHIVE_BYTES_LIMIT, 64 * 1024 * 1024);
+        assert_eq!(EPUB_CENTRAL_DIRECTORY_BYTES_LIMIT, 2 * 1024 * 1024);
+        assert_eq!(EPUB_ARCHIVE_ENTRY_LIMIT, 4096);
+        assert_eq!(EPUB_MANIFEST_LIMIT, 4096);
+        assert_eq!(EPUB_SPINE_LIMIT, 4096);
+        assert_eq!(EPUB_REFLOW_TEXT_LIMIT, 7 * 1024 * 1024);
+    }
+
+    #[test]
+    fn opens_more_than_legacy_512_zip_entries_and_tail_manifest_nav() {
+        let path = temp_epub("many-entries");
+        let mut manifest = String::new();
+        let mut entries = vec![
+            (
+                "META-INF/container.xml".to_string(),
+                "<container><rootfiles><rootfile full-path='OEBPS/book.opf'/></rootfiles></container>"
+                    .to_string(),
+            ),
+            (
+                "OEBPS/c1.xhtml".to_string(),
+                "<html><body><h1>Readable</h1><p>Large fixture chapter.</p></body></html>"
+                    .to_string(),
+            ),
+            (
+                "OEBPS/nav.xhtml".to_string(),
+                "<nav><ol><li><a href='c1.xhtml'>Readable</a></li></ol></nav>".to_string(),
+            ),
+        ];
+        for index in 0..520 {
+            let id = format!("dummy{index}");
+            let href = format!("dummy{index}.txt");
+            manifest.push_str(&format!(
+                "<item id='{id}' href='{href}' media-type='text/plain'/>"
+            ));
+            entries.push((format!("OEBPS/{href}"), String::new()));
+        }
+        manifest.push_str("<item id='c1' href='c1.xhtml' media-type='application/xhtml+xml'/>");
+        manifest.push_str(
+            "<item id='nav' href='nav.xhtml' media-type='application/xhtml+xml' properties='nav'/>",
+        );
+        let opf = format!(
+            "<package><metadata><dc:title>Large Fixture</dc:title></metadata><manifest>{manifest}</manifest><spine><itemref idref='nav'/><itemref idref='c1'/></spine></package>"
+        );
+        entries.push(("OEBPS/book.opf".to_string(), opf));
+        let borrowed = entries
+            .iter()
+            .map(|(name, body)| (name.as_str(), body.as_str()))
+            .collect::<Vec<_>>();
+        fs::write(&path, stored_zip(&borrowed)).unwrap();
+        let epub = open_epub(&path).unwrap();
+        assert_eq!(epub.title, "Large Fixture");
+        assert_eq!(epub.chapters.len(), 1);
+        assert!(epub.text.contains("Large fixture chapter."));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn skips_missing_cover_and_nav_spine_rows_but_keeps_readable_chapter() {
+        let path = temp_epub("skip-non-readable-spine");
+        let bytes = stored_zip(&[
+            ("META-INF/container.xml", "<container><rootfiles><rootfile full-path='OEBPS/book.opf'/></rootfiles></container>"),
+            ("OEBPS/book.opf", "<package><metadata><dc:title>Skip Rows</dc:title></metadata><manifest><item id='nav' href='nav.xhtml' media-type='application/xhtml+xml' properties='nav'/><item id='c1' href='c1.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='cover'/><itemref idref='nav'/><itemref idref='c1'/></spine></package>"),
+            ("OEBPS/nav.xhtml", "<nav><ol><li><a href='c1.xhtml'>Start</a></li></ol></nav>"),
+            ("OEBPS/c1.xhtml", "<html><body><h1>Start</h1><p>Readable chapter.</p></body></html>"),
+        ]);
+        fs::write(&path, bytes).unwrap();
+        let epub = open_epub(&path).unwrap();
+        assert_eq!(epub.chapters.len(), 1);
+        assert!(epub.text.contains("Readable chapter."));
+        assert!(!epub.text.contains("Start Start"));
+        let _ = fs::remove_file(path);
     }
 
     #[test]

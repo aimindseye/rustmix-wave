@@ -11,6 +11,9 @@ Use a FAT-formatted SD card. Rustmix Wave mounts it at `/sdcard` and expects the
   BOOKS/
   READER/
     CACHE/
+  FONTS/
+    FONTS.TXT
+    *.RWF
   VOICE/
   SLEEP/
     *.BMP
@@ -126,6 +129,18 @@ The device creates Reader state automatically:
 ```
 
 Reader writes use `.TMP` and `.BAK` siblings for recovery.
+
+## Devanagari and Gujarati Reader fonts
+
+Generate SD Unicode packs locally with `tools/font-builder/index.html`. Use local **Noto Sans Devanagari** and **Noto Sans Gujarati** files and a corpus extracted from the EPUBs. The builder downloads one `rustmix-indic-font-pack.zip` archive so browser multiple-download protection cannot omit pack files:
+
+```bash
+python3 scripts/extract-epub-font-corpus.py book1.epub book2.epub > indic-corpus.txt
+./scripts/install-indic-font-pack.sh ~/Downloads/rustmix-indic-pack /Volumes/YOUR_SD_CARD
+./scripts/verify-indic-font-pack.sh /Volumes/YOUR_SD_CARD
+```
+
+See [`UNICODE_FONTS.md`](UNICODE_FONTS.md).
 
 ## Voice Notes
 

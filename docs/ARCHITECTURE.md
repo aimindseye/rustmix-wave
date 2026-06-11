@@ -134,6 +134,18 @@ BOOT long  -> hierarchical Back
 
 `src/reader.rs` owns TXT and EPUB library rows, per-book state, bookmarks, preferences, and bounded pagination. `src/epub.rs` is an isolated EPUB parser boundary: it reads a bounded ZIP central directory, extracts stored or DEFLATE members, resolves `META-INF/container.xml`, parses OPF manifest and spine records, flattens XHTML text, and builds TOC rows.
 
+The large-archive compatibility path is file-backed. `ZipArchive` retains the SD path, archive length, and a bounded central-directory index rather than reading the complete EPUB into RAM. Selected OPF, navigation, and XHTML members are opened and extracted on demand. The parser reserves a bounded flattened-text buffer up front, rejects archives outside explicit limits, skips malformed missing spine references, and excludes EPUB3 `nav` documents from readable chapter pagination.
+
+```text
+Archive bytes             <= 64 MiB on SD
+Central-directory bytes   <= 2 MiB retained temporarily
+ZIP entries               <= 4096
+OPF manifest rows         <= 4096
+OPF spine rows            <= 4096
+Flattened EPUB text       <= 7 MiB retained for the Reader session
+Chapter page anchors      <= 16384
+```
+
 Reader state lives below:
 
 ```text
@@ -147,6 +159,24 @@ Reader state lives below:
 ```
 
 Reader writes use FAT 8.3-safe `.TMP` and `.BAK` siblings. Bookmarks retain byte offsets as authoritative anchors.
+
+### SD Unicode Indic EPUB typography
+
+`src/reader_unicode.rs` adds an optional Reader-only font boundary for Devanagari and Gujarati EPUB text:
+
+```text
+flattened UTF-8 EPUB text
+  -> script detection
+  -> cluster-aware pagination
+  -> active Reader-size FONTS.TXT selection
+  -> bounded RWF1 pack load from /sdcard/RUSTMIX/FONTS
+  -> longest-prefix shaped cluster lookup
+  -> clipped mixed Latin / Indic glyph drawing
+```
+
+The local browser builder under `tools/font-builder/` uses locally supplied **Noto Sans Devanagari** and **Noto Sans Gujarati** files. Browser canvas shaping rasterizes corpus-specific conjuncts, matras, virama sequences, and Gujarati clusters into compact 1-bpp `.RWF` entries. Raw font files are not committed and are not copied to the device.
+
+The active session loads only the required script packs for the selected Reader size. Missing packs are a readable Reader state (`FONT?`) rather than a boot failure. Resume positions, chapter anchors, and bookmarks remain source UTF-8 byte offsets, so one visual shaped cluster can map to several Unicode code points without changing persistence semantics.
 
 ## Voice Notes boundary
 
@@ -234,14 +264,21 @@ Heavy operations are deliberately moved away from the main task:
 
 | Operation | Boundary | Stack or buffer policy | Returned value |
 | --- | --- | --- | --- |
-| Full EPUB parse | short-lived `epub-parser` thread | 64 KiB worker stack | heap-owned bounded EPUB document |
-| EPUB title lookup during library scans | short-lived EPUB title thread | 32 KiB worker stack | compact title string |
+| Full EPUB parse | short-lived `epub-parser` thread | preferred 48 KiB worker stack, 32 KiB fragmentation fallback, plus 4 KiB contiguous-heap start guard | heap-owned bounded EPUB document |
+| EPUB title lookup | deferred until selected EPUB open | Library scan uses FAT filename first; parsed OPF metadata replaces it after open | compact session title |
 | HTTPS weather fetch | `runtime_worker::run_named_worker("weather-fetch", ...)` | 64 KiB worker stack, bounded 8 KiB response | parsed weather snapshot or classified error |
 | Lua app open | `runtime_worker::run_named_worker("lua-loader", ...)` | 32 KiB worker stack, bounded script size | compact native Lua session and canvas |
 | Wi-Fi transfer portal | ESP-IDF HTTP server task | 24 KiB task stack, 4 KiB streaming chunks, 64 MiB upload cap | compact lifecycle snapshot |
 | Voice Notes PCM record/playback | cooperative main-loop chunks | bounded I2S RX/TX buffers, streamed `.TMP` finalization | compact UI progress snapshots |
+| Indic Reader font pack load | visible-page SD streaming boundary | selected `.RWF` files remain on SD; only glyphs referenced by the current page are retained, capped at 2048 page glyphs | bounded visible-page RWF subset |
 
 `src/runtime_worker.rs` logs memory snapshots before and after generic named workers, joins the short-lived thread, maps worker-start and panic failures into explicit errors, and returns a compact result to the main loop.
+
+The EPUB parser worker uses a fragmentation-aware start boundary. Network startup and TLS may reduce the largest contiguous internal-heap block even when total heap remains healthy. The parser prefers a 48 KiB task stack, falls back to 32 KiB for the file-backed path when necessary, reserves a 4 KiB pthread-bookkeeping guard, records the largest internal block before spawning, and returns a readable preflight error instead of blindly exhausting internal heap.
+
+Library scanning is deliberately filename-first. It does not spawn an EPUB title thread for every row. OPF metadata replaces the fallback title after the selected EPUB has opened. This avoids repetitive worker-stack allocation immediately before full parsing and keeps the largest internal-heap block available for the parser boundary. The Library renderer follows the active selection through a seven-row scrolling window so a larger SD collection remains visible and reachable.
+
+EPUB session creation is first-page-first. The parser worker still returns a bounded flattened document, but the main task no longer walks the complete book to build chapter-page totals before showing content. The current page is rendered immediately, page anchors grow lazily through the existing bounded cache path, and chapter labels use a `+` suffix until the active chapter total is complete. For Indic text, `.RWF` files are streamed from SD and only the visible page's shaped glyph subset remains in RAM. This protects PSRAM for large books such as multi-volume Sanskrit/Hindi EPUBs.
 
 `src/runtime_memory.rs` records:
 

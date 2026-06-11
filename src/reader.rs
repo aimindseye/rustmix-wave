@@ -1,20 +1,26 @@
 //! Offline Reader state, TXT / EPUB pagination and Reader-owned persistence.
 //!
 //! v0.17.1 adds chapter-aware EPUB page labels, persistent chapter-aware EPUB
-//! bookmark labels and OPF-title Library rows while preserving the accepted TXT
+//! bookmark labels and filename-first Library rows while preserving the accepted TXT
 //! Reader, FAT 8.3 persistence, per-book resume and staged loading architecture.
 // rustmix-wave=epub-watchdog-memory-pressure-repair-ready
+// rustmix-wave=reader-library-scroll-epub-title-defer-ready
+// rustmix-wave=reader-epub-first-page-unicode-subset-ready
 
 use std::{
     fs::{self, File},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    time::{Duration, UNIX_EPOCH},
+    time::UNIX_EPOCH,
 };
 
 use crate::{
     buttons::ButtonEvent,
-    epub::{open_epub_on_worker, read_epub_title_on_worker, EpubDocument, EpubTocEntry},
+    epub::{open_epub_on_worker, EpubDocument, EpubTocEntry},
+    reader_unicode::{
+        continues_reader_cluster, detect_reader_scripts, preserve_reader_unicode_character,
+        ReaderScriptSummary, ReaderUnicodeFonts, READER_FONTS_DIRECTORY,
+    },
 };
 
 /// SD-card library owned by the Reader subsystem.
@@ -45,6 +51,8 @@ pub const READER_NEARBY_PAGE_CACHE: usize = 8;
 pub const READER_PAGE_READ_BYTES: usize = 16 * 1024;
 /// Maximum library rows retained for the embedded product UI.
 pub const READER_LIBRARY_LIMIT: usize = 128;
+/// Number of Reader Library book rows visible in one portrait window.
+pub const READER_LIBRARY_VISIBLE_ROWS: usize = 7;
 /// Maximum per-book last-position records retained on removable storage.
 pub const READER_POSITION_LIMIT: usize = 64;
 /// Maximum recent-book records retained on removable storage.
@@ -56,16 +64,10 @@ pub const READER_CACHE_OFFSET_LIMIT: usize = 4096;
 /// Persist an anchor-cache checkpoint after this many newly indexed pages.
 pub const READER_CACHE_CHECKPOINT_PAGES: usize = 4;
 /// Maximum pre-indexed EPUB page anchors retained for chapter-aware labels.
-pub const READER_EPUB_PAGE_ANCHOR_LIMIT: usize = 4096;
-/// Number of EPUB page anchors generated before briefly blocking the current
-/// task. The pause lets the ESP-IDF idle task feed its watchdog while large
-/// chapters are indexed for chapter-relative totals.
-pub const READER_EPUB_INDEX_YIELD_EVERY_PAGES: usize = 4;
-/// Cooperative pause used during bounded EPUB chapter pagination.
-pub const READER_EPUB_INDEX_YIELD_MILLIS: u64 = 1;
+pub const READER_EPUB_PAGE_ANCHOR_LIMIT: usize = 16_384;
 
 const READER_PERSISTENCE_VERSION: &str = "1";
-const READER_CACHE_VERSION: &str = "3";
+const READER_CACHE_VERSION: &str = "4";
 const READER_PREFS_VERSION: &str = "1";
 const CACHE_FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const CACHE_FNV_PRIME: u64 = 0x100000001b3;
@@ -125,7 +127,11 @@ pub struct ReaderChapterPageLabel {
 impl ReaderChapterPageLabel {
     #[must_use]
     pub fn page_text(&self) -> String {
-        format!("{}/{}", self.page_number, self.page_count)
+        if self.page_count == 0 {
+            format!("{}+", self.page_number)
+        } else {
+            format!("{}/{}", self.page_number, self.page_count)
+        }
     }
 }
 
@@ -773,6 +779,8 @@ pub struct ReaderEpubChapterPages {
     pub text_offset: u64,
     pub text_end_offset: u64,
     pub page_offsets: Vec<u64>,
+    /// True once lazy pagination reaches this chapter's text end.
+    pub complete: bool,
 }
 
 /// Active Reader session. Generated page anchors and nearby rendered pages remain
@@ -793,6 +801,10 @@ pub struct ReaderSession {
     pub index_complete: bool,
     pub cache: Vec<ReaderCachedPage>,
     pub epub_chapter_pages: Vec<ReaderEpubChapterPages>,
+    pub scripts: ReaderScriptSummary,
+    pub unicode_fonts: ReaderUnicodeFonts,
+    /// SD root used to reload only the visible page's Indic glyph subset.
+    pub unicode_fonts_root: String,
 }
 
 impl ReaderSession {
@@ -810,7 +822,16 @@ impl ReaderSession {
 
     #[must_use]
     pub fn content_badge(&self) -> &'static str {
-        self.book.format.badge()
+        if self.book.format == BookFormat::Epub && self.scripts.has_indic() {
+            self.unicode_fonts.status_label(self.scripts)
+        } else {
+            self.book.format.badge()
+        }
+    }
+
+    #[must_use]
+    pub fn unicode_font_warning(&self) -> Option<&str> {
+        self.unicode_fonts.warning.as_deref()
     }
 
     #[must_use]
@@ -912,8 +933,71 @@ impl ReaderSession {
         Some(ReaderChapterPageLabel {
             chapter_number: chapter.chapter_number,
             page_number,
-            page_count: chapter.page_offsets.len().max(1),
+            page_count: if chapter.complete {
+                chapter.page_offsets.len().max(1)
+            } else {
+                0
+            },
         })
+    }
+
+    fn refresh_unicode_fonts_for_current_page(&mut self) {
+        if self.book.format != BookFormat::Epub || !self.scripts.has_indic() {
+            return;
+        }
+        let page_text = self
+            .current_cached_page()
+            .map(cached_page_text)
+            .unwrap_or_default();
+        self.unicode_fonts = ReaderUnicodeFonts::load_page_best_effort(
+            Path::new(&self.unicode_fonts_root),
+            self.layout.font_size,
+            self.scripts,
+            page_text.as_str(),
+        );
+        let warning = self.unicode_fonts.warning.as_deref().unwrap_or("none");
+        log::info!(
+            "rustmix-wave=reader-unicode-page-fonts status={} glyphs={} scripts={} warning={}",
+            if self.unicode_fonts.missing_required(self.scripts) {
+                "degraded"
+            } else {
+                "loaded"
+            },
+            self.unicode_fonts.loaded_glyph_count(),
+            self.scripts.label(),
+            warning
+        );
+    }
+
+    fn record_epub_page_anchor(&mut self, offset: u64, next_offset: u64) {
+        let Some(document) = self.epub_document.as_ref() else {
+            return;
+        };
+        let Some(chapter) = document.chapter_for_offset(offset).cloned() else {
+            return;
+        };
+        let chapter_complete = next_offset >= chapter.text_end_offset;
+        if let Some(indexed) = self
+            .epub_chapter_pages
+            .iter_mut()
+            .find(|indexed| indexed.chapter_number == chapter.number)
+        {
+            if !indexed.page_offsets.contains(&offset) {
+                indexed.page_offsets.push(offset);
+                indexed.page_offsets.sort_unstable();
+            }
+            indexed.complete |= chapter_complete;
+        } else {
+            self.epub_chapter_pages.push(ReaderEpubChapterPages {
+                chapter_number: chapter.number,
+                text_offset: chapter.text_offset,
+                text_end_offset: chapter.text_end_offset,
+                page_offsets: vec![offset],
+                complete: chapter_complete,
+            });
+            self.epub_chapter_pages
+                .sort_by_key(|chapter| chapter.chapter_number);
+        }
     }
 
     fn push_cached_page(&mut self, page: ReaderCachedPage) {
@@ -992,6 +1076,7 @@ impl ReaderSession {
         self.page_offsets.push(offset);
         self.indexed_through = page.next_byte_offset;
         self.index_complete = self.indexed_through >= source_size;
+        self.record_epub_page_anchor(offset, self.indexed_through);
         self.push_cached_page(page);
         Ok(true)
     }
@@ -1004,6 +1089,7 @@ impl ReaderSession {
         if target < self.page_offsets.len() {
             self.current_page = target;
             self.ensure_page_cached(target)?;
+            self.refresh_unicode_fonts_for_current_page();
         }
         Ok(())
     }
@@ -1012,6 +1098,7 @@ impl ReaderSession {
         if self.current_page > 0 {
             self.current_page -= 1;
             self.ensure_page_cached(self.current_page)?;
+            self.refresh_unicode_fonts_for_current_page();
         }
         Ok(())
     }
@@ -1143,6 +1230,7 @@ pub struct ReaderPersistenceReport {
 pub struct ReaderUiState {
     pub books_root: String,
     pub state_root: String,
+    pub fonts_root: String,
     pub books: Vec<ReaderBook>,
     pub positions: Vec<ReaderLocation>,
     pub recent: Vec<ReaderLocation>,
@@ -1172,6 +1260,7 @@ impl Default for ReaderUiState {
         Self {
             books_root: READER_BOOKS_DIRECTORY.into(),
             state_root: READER_STATE_DIRECTORY.into(),
+            fonts_root: READER_FONTS_DIRECTORY.into(),
             books: Vec::new(),
             positions: Vec::new(),
             recent: Vec::new(),
@@ -1211,6 +1300,20 @@ impl ReaderUiState {
         Self {
             books_root: books_root.into(),
             state_root: state_root.into(),
+            ..Self::default()
+        }
+    }
+
+    #[must_use]
+    pub fn with_roots_and_fonts(
+        books_root: impl Into<String>,
+        state_root: impl Into<String>,
+        fonts_root: impl Into<String>,
+    ) -> Self {
+        Self {
+            books_root: books_root.into(),
+            state_root: state_root.into(),
+            fonts_root: fonts_root.into(),
             ..Self::default()
         }
     }
@@ -1338,8 +1441,29 @@ impl ReaderUiState {
     }
 
     #[must_use]
+    pub fn library_entry_count(&self) -> usize {
+        match self.library_tab {
+            ReaderLibraryTab::Recent => self.recent.len(),
+            ReaderLibraryTab::Books | ReaderLibraryTab::Files => self.books.len(),
+            ReaderLibraryTab::Bookmarks => self.bookmarks.len(),
+        }
+    }
+
+    /// Keep the active Library row inside the seven-row portrait viewport.
+    /// Row zero remains the explicit tab-control row and never scrolls the list.
+    #[must_use]
+    pub fn library_visible_window_start(&self) -> usize {
+        let entry_count = self.library_entry_count();
+        let selected_entry = self.library_selected.saturating_sub(1);
+        selected_entry
+            .saturating_add(1)
+            .saturating_sub(READER_LIBRARY_VISIBLE_ROWS)
+            .min(entry_count.saturating_sub(READER_LIBRARY_VISIBLE_ROWS))
+    }
+
+    #[must_use]
     pub fn library_row_count(&self) -> usize {
-        self.visible_entries().len().saturating_add(1)
+        self.library_entry_count().saturating_add(1)
     }
 
     pub fn apply_library_button(&mut self, event: ButtonEvent) -> bool {
@@ -1761,7 +1885,9 @@ impl ReaderUiState {
             Ok((page, source_size)) => {
                 session.indexed_through = page.next_byte_offset;
                 session.index_complete = session.indexed_through >= source_size;
+                session.record_epub_page_anchor(entry.text_offset, session.indexed_through);
                 session.push_cached_page(page);
+                session.refresh_unicode_fonts_for_current_page();
                 self.last_message = Some(format!("TOC: {}", entry.label));
                 self.persist_current_session_best_effort();
                 true
@@ -2095,6 +2221,9 @@ impl ReaderUiState {
             index_complete,
             cache: vec![page],
             epub_chapter_pages: Vec::new(),
+            scripts: ReaderScriptSummary::default(),
+            unicode_fonts: ReaderUnicodeFonts::default(),
+            unicode_fonts_root: self.fonts_root.clone(),
         })
     }
 
@@ -2105,41 +2234,66 @@ impl ReaderUiState {
         requested: Option<&ReaderLocation>,
     ) -> Result<ReaderSession, String> {
         let source_size = document.text_size_bytes();
-        let layout = self.preferences.layout();
-        let epub_chapter_pages = index_epub_chapter_pages(&document, layout)?;
-        let page_offsets: Vec<u64> = epub_chapter_pages
-            .iter()
-            .flat_map(|chapter| chapter.page_offsets.iter().copied())
-            .collect();
-        if page_offsets.is_empty() {
-            return Err("EPUB chapter pagination produced no readable pages".into());
+        if source_size == 0 {
+            return Err("EPUB flattened text is empty".into());
         }
+        let layout = self.preferences.layout();
         let requested = requested.filter(|location| location.matches_book(book));
-        let requested_offset =
-            requested.map_or(0, |location| location.byte_offset.min(source_size));
-        let current_page = page_offsets
-            .partition_point(|anchor| *anchor <= requested_offset)
-            .saturating_sub(1)
-            .min(page_offsets.len().saturating_sub(1));
-        let offset = page_offsets[current_page];
-        let page = read_epub_page(&document, layout, offset, current_page)?;
+        let requested_offset = requested
+            .map_or(0, |location| location.byte_offset)
+            .min(source_size.saturating_sub(1));
+        let page_number_base = requested.map_or(0, |location| location.page_index);
+        let page = read_epub_page(&document, layout, requested_offset, page_number_base)?;
+        let indexed_through = page.next_byte_offset;
+        let index_complete = indexed_through >= source_size;
+        let scripts = detect_reader_scripts(&document.text);
+        let page_text = cached_page_text(&page);
+        let unicode_fonts = ReaderUnicodeFonts::load_page_best_effort(
+            Path::new(&self.fonts_root),
+            self.preferences.font_size,
+            scripts,
+            page_text.as_str(),
+        );
+        let warning = unicode_fonts.warning.as_deref().unwrap_or("none");
+        log::info!(
+            "rustmix-wave=reader-unicode-page-fonts status={} glyphs={} scripts={} warning={}",
+            if unicode_fonts.missing_required(scripts) {
+                "degraded"
+            } else {
+                "loaded"
+            },
+            unicode_fonts.loaded_glyph_count(),
+            scripts.label(),
+            warning
+        );
         let mut session_book = book.clone();
         if !document.title.trim().is_empty() {
             session_book.title = document.title.clone();
         }
-        Ok(ReaderSession {
+        let mut session = ReaderSession {
             book: session_book,
             encoding: TextEncoding::Utf8,
             epub_document: Some(document),
             layout,
-            current_page,
-            page_number_base: 0,
-            page_offsets,
-            indexed_through: source_size,
-            index_complete: true,
+            current_page: 0,
+            page_number_base,
+            page_offsets: vec![requested_offset],
+            indexed_through,
+            index_complete,
             cache: vec![page],
-            epub_chapter_pages,
-        })
+            epub_chapter_pages: Vec::new(),
+            scripts,
+            unicode_fonts,
+            unicode_fonts_root: self.fonts_root.clone(),
+        };
+        session.record_epub_page_anchor(requested_offset, indexed_through);
+        log::info!(
+            "rustmix-wave=reader-epub-first-page status=ready anchor={} indexed-through={} source-bytes={} index-policy=lazy",
+            requested_offset,
+            indexed_through,
+            source_size
+        );
+        Ok(session)
     }
 
     fn persist_current_session_best_effort(&mut self) {
@@ -2261,14 +2415,12 @@ pub fn scan_txt_library(root: impl AsRef<Path>) -> Result<Vec<ReaderBook>, Strin
             .and_then(|value| value.to_str())
             .unwrap_or("Untitled book")
             .to_string();
-        let title = if format == BookFormat::Epub {
-            read_epub_title_on_worker(&path)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or(fallback_title)
-        } else {
-            fallback_title
-        };
+        // Use the FAT filename during the bounded Library scan. EPUB OPF title
+        // extraction is deferred until the selected book is fully opened, where
+        // `open_epub_session()` replaces this fallback from `EpubDocument::title`.
+        // This avoids repeatedly spawning 32 KiB title workers immediately before
+        // the larger parser worker needs one contiguous internal-heap block.
+        let title = fallback_title;
         books.push(ReaderBook {
             path: path.to_string_lossy().into_owned(),
             title,
@@ -2281,6 +2433,16 @@ pub fn scan_txt_library(root: impl AsRef<Path>) -> Result<Vec<ReaderBook>, Strin
         }
     }
     books.sort_by(|left, right| left.title.to_lowercase().cmp(&right.title.to_lowercase()));
+    let epub_count = books
+        .iter()
+        .filter(|book| book.format == BookFormat::Epub)
+        .count();
+    log::info!(
+        "rustmix-wave=reader-library-scan status=completed books={} txt={} epub={} title-policy=fat-filename-first opf-title=after-open",
+        books.len(),
+        books.len().saturating_sub(epub_count),
+        epub_count
+    );
     Ok(books)
 }
 
@@ -2311,6 +2473,17 @@ pub fn detect_txt_encoding(path: impl AsRef<Path>) -> Result<TextEncoding, Strin
     }
 }
 
+fn cached_page_text(page: &ReaderCachedPage) -> String {
+    let mut text = String::new();
+    for line in &page.lines {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(line.text.as_str());
+    }
+    text
+}
+
 fn read_reader_page(
     book: &ReaderBook,
     encoding: TextEncoding,
@@ -2328,61 +2501,6 @@ fn read_reader_page(
             page_index,
         ),
     }
-}
-
-fn index_epub_chapter_pages(
-    document: &EpubDocument,
-    layout: ReaderLayout,
-) -> Result<Vec<ReaderEpubChapterPages>, String> {
-    let mut indexed = Vec::new();
-    let mut total_pages = 0_usize;
-    for chapter in &document.chapters {
-        let mut page_offsets = Vec::new();
-        let mut offset = chapter.text_offset;
-        while offset < chapter.text_end_offset {
-            if total_pages >= READER_EPUB_PAGE_ANCHOR_LIMIT {
-                return Err(format!(
-                    "EPUB pagination exceeds {} page anchor limit",
-                    READER_EPUB_PAGE_ANCHOR_LIMIT
-                ));
-            }
-            page_offsets.push(offset);
-            total_pages += 1;
-            let page = read_epub_page_until(
-                document,
-                layout,
-                offset,
-                total_pages - 1,
-                chapter.text_end_offset,
-            )?;
-            if page.next_byte_offset <= offset {
-                return Err(format!(
-                    "EPUB chapter {} pagination did not advance",
-                    chapter.number
-                ));
-            }
-            offset = page.next_byte_offset.min(chapter.text_end_offset);
-            if total_pages % READER_EPUB_INDEX_YIELD_EVERY_PAGES == 0 {
-                std::thread::sleep(Duration::from_millis(READER_EPUB_INDEX_YIELD_MILLIS));
-            }
-        }
-        if !page_offsets.is_empty() {
-            indexed.push(ReaderEpubChapterPages {
-                chapter_number: chapter.number,
-                text_offset: chapter.text_offset,
-                text_end_offset: chapter.text_end_offset,
-                page_offsets,
-            });
-        }
-    }
-    log::info!(
-        "rustmix-wave=epub-chapter-index status=completed chapters={} pages={} yield-every-pages={} yield-ms={}",
-        indexed.len(),
-        total_pages,
-        READER_EPUB_INDEX_YIELD_EVERY_PAGES,
-        READER_EPUB_INDEX_YIELD_MILLIS
-    );
-    Ok(indexed)
 }
 
 fn read_epub_page(
@@ -2524,6 +2642,10 @@ fn normalize_decoded(decoded: &[(char, u64)]) -> Vec<(char, u64)> {
 }
 
 fn push_normalized_character(output: &mut Vec<(char, u64)>, character: char, next_offset: u64) {
+    if preserve_reader_unicode_character(character) {
+        output.push((character, next_offset));
+        return;
+    }
     let replacement: &str = match character {
         '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{00AB}' | '\u{00BB}' => "\"",
         '\u{2018}' | '\u{2019}' | '\u{201A}' => "'",
@@ -2562,6 +2684,8 @@ fn is_word_character(character: char) -> bool {
 fn paginate_decoded(decoded: &[(char, u64)], layout: ReaderLayout) -> (Vec<ReaderPageLine>, u64) {
     let mut lines = Vec::new();
     let mut line = String::new();
+    let mut line_clusters = 0_usize;
+    let mut previous = None;
     let mut consumed = decoded
         .first()
         .map_or(0, |(_, offset)| offset.saturating_sub(1));
@@ -2573,6 +2697,8 @@ fn paginate_decoded(decoded: &[(char, u64)], layout: ReaderLayout) -> (Vec<Reade
                     text: core::mem::take(&mut line),
                     paragraph_end: true,
                 });
+                line_clusters = 0;
+                previous = None;
                 consumed = next_offset;
                 if lines.len() >= layout.lines_per_page {
                     break;
@@ -2582,11 +2708,14 @@ fn paginate_decoded(decoded: &[(char, u64)], layout: ReaderLayout) -> (Vec<Reade
             value if value.is_control() => ' ',
             value => value,
         };
-        if line.chars().count() >= layout.chars_per_line {
+        let continues_cluster = continues_reader_cluster(previous, character);
+        if line_clusters >= layout.chars_per_line && !continues_cluster {
             lines.push(ReaderPageLine {
                 text: core::mem::take(&mut line),
                 paragraph_end: false,
             });
+            line_clusters = 0;
+            previous = None;
             if lines.len() >= layout.lines_per_page {
                 break;
             }
@@ -2594,9 +2723,15 @@ fn paginate_decoded(decoded: &[(char, u64)], layout: ReaderLayout) -> (Vec<Reade
         if character.is_whitespace() {
             if !line.is_empty() && !line.ends_with(' ') {
                 line.push(' ');
+                line_clusters += 1;
+                previous = Some(' ');
             }
         } else {
+            if !continues_reader_cluster(previous, character) {
+                line_clusters += 1;
+            }
             line.push(character);
+            previous = Some(character);
         }
         consumed = next_offset;
     }
@@ -3101,10 +3236,13 @@ mod tests {
         BookFormat, ParagraphAlignment, ReaderBook, ReaderChapterPageLabel, ReaderLoadingStage,
         ReaderLocation, ReaderOrientation, ReaderPreferences, ReaderSession, ReaderTickOutcome,
         ReaderUiState, ReadingPreference, ReadingTheme, TextEncoding, LEGACY_READER_POSITIONS_FILE,
-        READER_BOOKMARKS_FILE, READER_EPUB_INDEX_YIELD_EVERY_PAGES, READER_EPUB_INDEX_YIELD_MILLIS,
-        READER_POSITIONS_FILE, READER_PREFS_FILE, READER_RECENT_FILE, READER_STATE_FILE,
+        READER_BOOKMARKS_FILE, READER_LIBRARY_VISIBLE_ROWS, READER_POSITIONS_FILE,
+        READER_PREFS_FILE, READER_RECENT_FILE, READER_STATE_FILE,
     };
-    use crate::buttons::ButtonEvent;
+    use crate::{
+        buttons::ButtonEvent,
+        reader_unicode::{ReaderScriptSummary, ReaderUnicodeFonts, READER_FONTS_DIRECTORY},
+    };
 
     fn temp_dir(name: &str) -> PathBuf {
         let root =
@@ -3151,6 +3289,30 @@ mod tests {
         assert_eq!(books.len(), 2);
         assert_eq!(books[0].title, "Dracula");
         assert_eq!(books[1].format, BookFormat::Epub);
+    }
+
+    #[test]
+    fn library_visible_window_tracks_rows_beyond_first_portrait_page() {
+        let mut reader = ReaderUiState::default();
+        reader.books = (0..12)
+            .map(|index| ReaderBook {
+                path: format!("/sdcard/RUSTMIX/BOOKS/B{index:02}.TXT"),
+                title: format!("Book {index:02}"),
+                format: BookFormat::Text,
+                size_bytes: 1,
+                modified_seconds: 0,
+            })
+            .collect();
+        assert_eq!(READER_LIBRARY_VISIBLE_ROWS, 7);
+        assert_eq!(reader.library_visible_window_start(), 0);
+        reader.library_selected = 7;
+        assert_eq!(reader.library_visible_window_start(), 0);
+        reader.library_selected = 8;
+        assert_eq!(reader.library_visible_window_start(), 1);
+        reader.library_selected = 12;
+        assert_eq!(reader.library_visible_window_start(), 5);
+        reader.library_selected = 0;
+        assert_eq!(reader.library_visible_window_start(), 0);
     }
 
     #[test]
@@ -3617,6 +3779,9 @@ mod tests {
             index_complete: false,
             cache: Vec::new(),
             epub_chapter_pages: Vec::new(),
+            scripts: ReaderScriptSummary::default(),
+            unicode_fonts: ReaderUnicodeFonts::default(),
+            unicode_fonts_root: READER_FONTS_DIRECTORY.into(),
         });
         assert_eq!(reader.bookmark_display_page(&bookmark), 3);
     }
@@ -3657,9 +3822,25 @@ mod tests {
     }
 
     #[test]
-    fn epub_chapter_index_cooperative_yield_policy_is_bounded() {
-        assert_eq!(READER_EPUB_INDEX_YIELD_EVERY_PAGES, 4);
-        assert_eq!(READER_EPUB_INDEX_YIELD_MILLIS, 1);
+    fn lazy_epub_chapter_label_uses_plus_suffix_until_total_is_complete() {
+        assert_eq!(
+            ReaderChapterPageLabel {
+                chapter_number: 4,
+                page_number: 2,
+                page_count: 0,
+            }
+            .page_text(),
+            "2+"
+        );
+        assert_eq!(
+            ReaderChapterPageLabel {
+                chapter_number: 4,
+                page_number: 2,
+                page_count: 7,
+            }
+            .page_text(),
+            "2/7"
+        );
     }
 
     #[test]

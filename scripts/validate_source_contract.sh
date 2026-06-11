@@ -55,6 +55,7 @@ expected = {
     'RELEASE.md',
     'SD_CARD_SETUP.md',
     'USER_GUIDE.md',
+    'UNICODE_FONTS.md',
 }
 actual = {p.name for p in Path('docs').iterdir() if p.is_file()}
 assert actual == expected, f'durable docs mismatch: actual={sorted(actual)} expected={sorted(expected)}'
@@ -65,7 +66,7 @@ assert not list(Path('docs').glob('*REPAIR*')), 'repair docs must be removed'
 readme = Path('README.md').read_text()
 arch = Path('docs/ARCHITECTURE.md').read_text()
 for fragment in (
-    'Current release: **v1.0.0**',
+    'Current release: **v1.1.0**',
     'scripts/build-release-firmware.sh',
     'scripts/flash-release.sh',
     'scripts/test-release-flash-workflow.sh',
@@ -78,6 +79,10 @@ for fragment in (
     'screenshots/',
     'Sensor-driven utilities and motion games',
     'Main-task safety and worker isolation',
+    'SD Unicode Indic EPUB fonts',
+    'tools/font-builder/index.html',
+    'Physically verified Devanagari and Gujarati EPUB rendering',
+    'Screenshots.md',
 ):
     assert fragment in readme, f'README missing: {fragment}'
 for fragment in (
@@ -92,6 +97,7 @@ for fragment in (
     'Native IMU event pipeline',
     'Main-task safety and worker boundary',
     'Screenshot-driven user documentation',
+    'SD Unicode Indic EPUB typography',
 ):
     assert fragment in arch, f'architecture missing: {fragment}'
 PY
@@ -106,6 +112,7 @@ screenshots = Path('screenshots')
 guide = Path('docs/USER_GUIDE.md').read_text()
 readme = Path('README.md').read_text()
 architecture = Path('docs/ARCHITECTURE.md').read_text()
+root_gallery = Path('Screenshots.md').read_text()
 
 assert screenshots.is_dir(), 'screenshots directory missing'
 assert (screenshots / 'README.md').is_file(), 'screenshots/README.md missing'
@@ -127,11 +134,19 @@ expected = {
     'unit-converter.jpg', 'unit-converter1.jpg', 'voice_note_detail.jpg',
     'voice_note_edit.jpg', 'voice_notes.jpg', 'voice_notes_record.jpg', 'weather-1.jpg',
     'weather.png', 'wifi-transfer.jpg',
+    'epub-devanagari-bhagavat.jpg', 'epub-devanagari-garud-puran.jpg',
+    'epub-gujarati-valmiki-ramayan.jpg',
 }
 actual = {path.name for path in screenshots.iterdir() if path.is_file() and path.name != 'README.md'}
 assert actual == expected, f'screenshot set mismatch: missing={sorted(expected-actual)} extra={sorted(actual-expected)}'
 for filename in sorted(expected):
     assert f'../screenshots/{filename}' in guide, f'user guide does not reference screenshot: {filename}'
+for filename in (
+    'epub-devanagari-bhagavat.jpg',
+    'epub-devanagari-garud-puran.jpg',
+    'epub-gujarati-valmiki-ramayan.jpg',
+):
+    assert f'screenshots/{filename}' in root_gallery, f'root Screenshots.md missing: {filename}'
 for fragment in (
     '# Rustmix Wave user guide',
     '## Physical controls',
@@ -165,6 +180,9 @@ for fragment in (
     './scripts/validate_source_contract.sh',
     './scripts/test-host.sh',
     './scripts/test-release-flash-workflow.sh',
+    './scripts/test-indic-font-pack-workflow.sh',
+    "scripts/extract-epub-font-corpus.py",
+    "scripts/audit-indic-epub-fixture.py",
     'workflow_dispatch:',
 ):
     assert fragment in workflow, f'workflow missing: {fragment}'
@@ -182,8 +200,7 @@ known = Path('docs/KNOWN_ISSUES.md').read_text()
 
 for fragment in (
     './scripts/validate.sh',
-    'cargo +esp build --release',
-    'target/xtensa-esp32s3-espidf/release/waveshare-epd397-rust-app',
+    'ELF_SOURCE="$(./scripts/resolve-built-elf.sh)"',
     '-flash-release.sh',
     '-firmware-release.sha256',
     '-firmware-release.zip',
@@ -218,6 +235,51 @@ assert '*-flash.bin' in release_doc and 'No `*-flash.bin` artifact is generated.
 
 # The cleaned source must not carry an unverified legacy raw-address artifact.
 assert not list(Path('dist').glob('*-flash.bin')), 'legacy dist/*-flash.bin artifact present'
+
+workflow_test = Path('scripts/test-release-flash-workflow.sh').read_text()
+assert 'VERSION="$(sed -n' in workflow_test, 'release flash self-test must derive Cargo package version'
+assert 'waveshare-epd397-rust-app-v1.0.0' not in workflow_test, 'release flash self-test must not hard-code v1.0.0'
+PY
+}
+
+flash_target_resolution_contract() {
+  python3 - <<'PY'
+from pathlib import Path
+cargo_config = Path('.cargo/config.toml').read_text()
+assert 'target = "xtensa-esp32s3-espidf"' in cargo_config
+assert 'build-std = ["std", "panic_abort"]' in cargo_config
+resolver = Path('scripts/resolve-built-elf.sh').read_text()
+flash = Path('scripts/flash.sh').read_text()
+builder = Path('scripts/build-release-firmware.sh').read_text()
+release_doc = Path('docs/RELEASE.md').read_text()
+known = Path('docs/KNOWN_ISSUES.md').read_text()
+workflow = Path('.github/workflows/ci.yml').read_text()
+
+for fragment in (
+    '--message-format=json-render-diagnostics',
+    'compiler-artifact',
+    'executable',
+    '--target "$TARGET_TRIPLE"',
+    'TARGET_TRIPLE="${RUSTMIX_WAVE_TARGET:-xtensa-esp32s3-espidf}"',
+    'host-artifact-rejected',
+    '--bin "$PACKAGE_NAME"',
+    'waveshare-epd397-rust-app',
+):
+    assert fragment in resolver, f'ELF resolver missing: {fragment}'
+assert 'payload.get("target_directory")' not in resolver, 'resolver must not reconstruct ELF path from target_directory'
+assert 'ELF="$(./scripts/resolve-built-elf.sh)"' in flash
+assert 'cargo +esp build --release' not in flash, 'flash helper should build through resolver once'
+assert 'BIN="target/xtensa-esp32s3-espidf/release/waveshare-epd397-rust-app"' not in flash
+assert 'ELF_SOURCE="$(./scripts/resolve-built-elf.sh)"' in builder
+assert 'cargo +esp build --release' not in builder, 'release builder should build through resolver once'
+assert 'Cargo target-directory safety' in release_doc
+assert 'Explicit Xtensa target safety' in release_doc
+assert '-Z build-std=std,panic_abort --release --target xtensa-esp32s3-espidf' in release_doc
+assert 'ESP-IDF App Descriptor missing' in known
+assert 'compiler-artifact.executable' in release_doc
+assert 'Successful build but older firmware still boots' in known
+assert 'compiler-artifact.executable' in known
+assert 'scripts/test-flash-target-resolution.sh' in workflow
 PY
 }
 
@@ -265,16 +327,19 @@ keyboard = Path('src/keyboard_navigation.rs').read_text()
 voice = Path('src/voice_notes.rs').read_text()
 wifi = Path('src/wifi_transfer.rs').read_text()
 power = Path('src/power_key.rs').read_text()
+epub = Path('src/epub.rs').read_text()
 
 for module in (
     'calendar', 'dictionary', 'keyboard_navigation', 'power_key', 'power_key_menu',
-    'reader', 'epub', 'voice_notes', 'voice_note_metadata', 'wifi_transfer',
+    'reader', 'reader_unicode', 'epub', 'voice_notes', 'voice_note_metadata', 'wifi_transfer',
     'alarm', 'sleep_mode', 'sleep_images', 'sleep_network', 'lua_runtime', 'games',
 ):
     assert f'pub mod {module};' in lib, f'library module missing: {module}'
 
 for marker in (
     'rustmix-wave=release-flash-workflow-safety-ready',
+    'rustmix-wave=sd-unicode-indic-epub-reader-ready',
+    'rustmix-wave=reader-epub-large-archive-file-backed-ready',
     'rustmix-wave=power-key-short-menu-long-sleep-ready',
     'rustmix-wave=calendar-personal-event-editor-ready',
     'rustmix-wave=calendar-us-events-daily-agenda-ready',
@@ -345,6 +410,57 @@ for fragment in (
 ):
     assert fragment in calendar_screen, f'calendar editor compact layout missing: {fragment}'
 
+reader_state = Path('src/reader.rs').read_text()
+
+# Large EPUB fixtures stay bounded without retaining the complete archive in RAM.
+for fragment in (
+    'epub-large-archive-file-backed-repair-ready',
+    'EPUB_ARCHIVE_BYTES_LIMIT: u64 = 64 * 1024 * 1024',
+    'EPUB_CENTRAL_DIRECTORY_BYTES_LIMIT: usize = 2 * 1024 * 1024',
+    'EPUB_ARCHIVE_ENTRY_LIMIT: usize = 4096',
+    'EPUB_MANIFEST_LIMIT: usize = 4096',
+    'EPUB_SPINE_LIMIT: usize = 4096',
+    'EPUB_REFLOW_TEXT_LIMIT: usize = 7 * 1024 * 1024',
+    'path: PathBuf', 'archive_len: u64', 'File::open(&self.path)',
+    'estimated_reflow_capacity', 'is_reflowable_spine_item',
+    'action=skip reason=missing-manifest', 'action=skip reason=non-readable',
+    'opens_more_than_legacy_512_zip_entries_and_tail_manifest_nav',
+    'skips_missing_cover_and_nav_spine_rows_but_keeps_readable_chapter',
+):
+    assert fragment in epub, f'large EPUB repair missing: {fragment}'
+assert 'bytes: Vec<u8>' not in epub, 'ZIP archive must not retain the complete EPUB in RAM'
+assert 'READER_EPUB_PAGE_ANCHOR_LIMIT: usize = 16_384' in reader_state
+assert Path('scripts/audit-indic-epub-fixture.py').is_file()
+
+# Reader SD Unicode Indic packs preserve UTF-8 and load bounded Noto Sans cluster packs.
+reader_unicode = Path('src/reader_unicode.rs').read_text()
+reader_screen = Path('src/app/screens/reader.rs').read_text()
+for fragment in (
+    'READER_FONTS_DIRECTORY: &str = "/sdcard/RUSTMIX/FONTS"',
+    'READER_FONT_MANIFEST_FILE: &str = "FONTS.TXT"',
+    'READER_FONT_PACK_MAX_BYTES: usize = 1024 * 1024',
+    'READER_FONT_GLYPH_LIMIT: usize = 8192',
+    'ReaderUnicodeScript', 'Devanagari', 'Gujarati', 'RWF1',
+    'detect_reader_scripts', 'continues_reader_cluster', 'longest_prefix',
+):
+    assert fragment in reader_unicode, f'Reader Unicode contract missing: {fragment}'
+for fragment in (
+    'preserve_reader_unicode_character', 'ReaderUnicodeFonts::load_page_best_effort',
+    'unicode_fonts', 'scripts: ReaderScriptSummary',
+):
+    assert fragment in reader_state, f'Reader Unicode state missing: {fragment}'
+for fragment in (
+    'draw_reader_unicode_line', 'Indic page font unavailable; check monitor',
+    'Regenerate/install FONTS.TXT and .RWF packs',
+):
+    assert fragment in reader_screen, f'Reader Unicode renderer missing: {fragment}'
+for path in (
+    'tools/font-builder/index.html', 'tools/font-builder/app.js', 'tools/font-builder/zip_store.js', 'tools/font-builder/README.md',
+    'scripts/extract-epub-font-corpus.py', 'scripts/audit-indic-epub-fixture.py', 'scripts/install-indic-font-pack.sh',
+    'scripts/verify-indic-font-pack.sh', 'docs/UNICODE_FONTS.md',
+):
+    assert Path(path).is_file(), f'Reader Unicode tool missing: {path}'
+
 # Wi-Fi portal protects configuration and internal sidecars.
 for protected in (
     'WIFI.TXT', 'ALARMS.TXT', 'DISPLAY.TXT', 'WEATHER.TXT',
@@ -368,6 +484,7 @@ required = (
     'examples/sd-card/RUSTMIX/APPS/DICT/DATA/AA.JSN',
     'examples/sd-card/RUSTMIX/APPS/CALENDAR/EVENTS.TXT',
     'examples/sd-card/RUSTMIX/APPS/CALENDAR/US2026.TXT',
+    'examples/sd-card/RUSTMIX/FONTS/README.TXT',
     'examples/sd-card/RUSTMIX/APPS/SUDOKU/MAIN.LUA',
     'examples/sd-card/RUSTMIX/APPS/MINES/MAIN.LUA',
     'examples/sd-card/RUSTMIX/APPS/TILTMAZE/MAIN.LUA',
@@ -426,14 +543,16 @@ for path in sorted(Path('src').rglob('*.rs')):
 PY
 }
 
-check cargo-version-v1.0.0 grep -Eq '^version = "1\.0\.0"$' Cargo.toml
-check cargo-lock-version-v1.0.0 bash -c "grep -A2 'name = \"waveshare-epd397-rust-app\"' Cargo.lock | grep -q 'version = \"1.0.0\"'"
-check sdkconfig-version-v1.0.0 contains sdkconfig.defaults 'CONFIG_APP_PROJECT_VER="1.0.0"'
-check build-info-milestone contains src/build_info.rs 'UI_SHELL_MILESTONE: &str = "text-editor-layout-alignment"'
+check cargo-version-v1.1.0 grep -Eq '^version = "1\.1\.0"$' Cargo.toml
+check cargo-lock-version-v1.1.0 bash -c "grep -A2 'name = \"waveshare-epd397-rust-app\"' Cargo.lock | grep -q 'version = \"1.1.0\"'"
+check sdkconfig-version-v1.1.0 contains sdkconfig.defaults 'CONFIG_APP_PROJECT_VER="1.1.0"'
+check build-info-milestone contains src/build_info.rs 'UI_SHELL_MILESTONE: &str = "sd-unicode-indic-epub-reader"'
 check cleaned-repository-contract clean_repository_contract
 check screenshot-user-guide-contract screenshot_user_guide_contract
 check ci-workflow-contract ci_workflow_contract
 check release-elf-builder release_binary_builder_contract
+check flash-target-resolution-contract flash_target_resolution_contract
+check flash-target-resolution-selftest ./scripts/test-flash-target-resolution.sh
 check release-flash-workflow-selftest-script contains scripts/test-release-flash-workflow.sh 'release-flash-workflow-selftest=ok'
 check package-release-contract package_release_contract
 check host-test-native-target-isolation host_test_native_target_contract
@@ -442,15 +561,60 @@ check sd-examples-contract sd_examples_contract
 check font-notice-serif contains docs/licenses/FONT_NOTICES.md 'DejaVu Serif'
 check font-notice-atkinson contains docs/licenses/FONT_NOTICES.md 'Atkinson Hyperlegible Next Medium'
 check font-notice-literata contains docs/licenses/FONT_NOTICES.md 'Literata Medium'
+check font-notice-noto-sans-devanagari contains docs/licenses/FONT_NOTICES.md 'Noto Sans Devanagari'
+check font-notice-noto-sans-gujarati contains docs/licenses/FONT_NOTICES.md 'Noto Sans Gujarati'
+check indic-font-builder contains tools/font-builder/app.js 'RustmixNotoSansDevanagari'
+check indic-font-builder-single-zip contains tools/font-builder/app.js 'rustmix-indic-font-pack.zip'
+check indic-font-builder-zip-store contains tools/font-builder/zip_store.js 'storedZip'
+check indic-font-builder-single-zip-selftest ./scripts/test-indic-font-builder-zip.sh
+check indic-font-corpus-extractor python3 -c "import ast, pathlib; ast.parse(pathlib.Path('scripts/extract-epub-font-corpus.py').read_text())"
+check indic-epub-fixture-auditor python3 -c "import ast, pathlib; ast.parse(pathlib.Path('scripts/audit-indic-epub-fixture.py').read_text())"
+check indic-font-pack-workflow-selftest ./scripts/test-indic-font-pack-workflow.sh
 check no-raw-font-files bash -c '! find . -type f \( -iname "*.ttf" -o -iname "*.otf" -o -iname "*.woff" -o -iname "*.woff2" \) -print -quit | grep -q .'
 for script in scripts/*.sh; do
   check "bash-syntax-$(basename "$script")" bash -n "$script"
 done
 check rust-lexical-delimiter-scan rust_lexical_delimiter_scan
+check epub-parser-fragmentation-aware-stack-constant contains src/epub.rs 'pub const EPUB_PARSER_WORKER_STACK_BYTES: usize = 48 * 1024;'
+check epub-parser-fragmentation-aware-fallback-stack-constant contains src/epub.rs 'pub const EPUB_PARSER_WORKER_FALLBACK_STACK_BYTES: usize = 32 * 1024;'
+check epub-parser-fragmentation-aware-guard-constant contains src/epub.rs 'pub const EPUB_PARSER_WORKER_STACK_GUARD_BYTES: usize = 4 * 1024;'
+check epub-parser-fragmentation-aware-adaptive-selector contains src/epub.rs 'epub_parser_worker_stack_bytes'
+check epub-parser-fragmentation-aware-preflight contains src/epub.rs 'before-worker-epub-parser'
+check epub-parser-fragmentation-aware-after-join contains src/epub.rs 'after-worker-epub-parser'
+check epub-parser-fragmentation-aware-ready-marker contains src/main.rs 'reader-epub-parser-fragmentation-aware-stack-ready'
+check reader-library-scroll-visible-rows contains src/reader.rs 'pub const READER_LIBRARY_VISIBLE_ROWS: usize = 7;'
+check reader-library-scroll-window-helper contains src/reader.rs 'library_visible_window_start'
+check reader-library-scroll-render-skip contains src/app/screens/reader.rs '.skip(window_start)'
+check reader-library-scroll-render-take contains src/app/screens/reader.rs '.take(READER_LIBRARY_VISIBLE_ROWS)'
+check reader-library-title-defer-scan contains src/reader.rs 'title-policy=fat-filename-first opf-title=after-open'
+check reader-library-title-worker-deferred bash -c '! grep -Fq "read_epub_title_on_worker(&path)" src/reader.rs'
+check reader-library-scroll-title-defer-ready-marker contains src/main.rs 'reader-library-scroll-epub-title-defer-ready'
+check reader-epub-first-page-unicode-subset-ready-marker contains src/main.rs 'reader-epub-first-page-unicode-subset-ready'
+check reader-epub-first-page-lazy-open contains src/reader.rs 'index-policy=lazy'
+check reader-unicode-page-subset-loader contains src/reader_unicode.rs 'parse_page_subset_file'
+check reader-unicode-page-subset-bound contains src/reader_unicode.rs 'READER_FONT_PAGE_GLYPH_LIMIT: usize = 2048'
+check reader-unicode-page-subset-refresh contains src/reader.rs 'refresh_unicode_fonts_for_current_page'
+check reader-unicode-page-font-telemetry contains src/reader.rs 'rustmix-wave=reader-unicode-page-fonts'
+check indic-font-builder-adjustable-threshold contains tools/font-builder/index.html 'id="alphaThreshold"'
+check indic-font-builder-balanced-threshold contains tools/font-builder/app.js 'alphaThreshold'
+check reader-unicode-page-font-error-copy contains src/app/screens/reader.rs 'Indic page font unavailable; check monitor'
 
 if [[ "$failed" -ne 0 ]]; then
   echo 'source-contract-validation=failed' >&2
   exit 1
 fi
+
+
+# v1.1.0-r9-r1 native host-test font-directory import guard
+python3 - "$ROOT/src/reader.rs" <<'PY'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text()
+tests = text.split("#[cfg(test)]", 1)[1]
+needle = "ReaderScriptSummary, ReaderUnicodeFonts, READER_FONTS_DIRECTORY"
+if needle not in tests:
+    raise SystemExit("reader-native-host-test-font-directory-import=failed")
+print("reader-native-host-test-font-directory-import=ok")
+PY
 
 echo 'source-contract-validation=ok'

@@ -11,6 +11,7 @@ use embedded_graphics::{
 use crate::{
     app::{
         reader_typography::reader_body_style,
+        reader_unicode_typography::{draw_reader_unicode_line, reader_line_width},
         state::AppState,
         typography::{Text, TextBounds, UiTextRole},
         widgets::{
@@ -22,7 +23,7 @@ use crate::{
     orientation::OrientedFrameBuffer,
     reader::{
         BookFormat, ParagraphAlignment, ReaderLibraryTab, ReaderLoadingStage, ReaderOption,
-        ReadingPreference, ReadingTheme,
+        ReadingPreference, ReadingTheme, READER_LIBRARY_VISIBLE_ROWS,
     },
 };
 
@@ -129,13 +130,20 @@ pub fn render_library(
             });
         Text::new(&truncate(message, 54), Point::new(26, 302), body).draw(display)?;
     }
-    for (index, entry) in visible.iter().take(7).enumerate() {
+    let window_start = reader.library_visible_window_start();
+    for (row, (index, entry)) in visible
+        .iter()
+        .enumerate()
+        .skip(window_start)
+        .take(READER_LIBRARY_VISIBLE_ROWS)
+        .enumerate()
+    {
         let selected = reader.library_selected == index + 1;
         let columns = library_entry_columns(reader, entry);
         draw_row(
             display,
             state,
-            248 + index as i32 * 58,
+            248 + row as i32 * 58,
             selected,
             &truncate(&entry.book.title, 25),
             columns.badge.as_str(),
@@ -436,9 +444,27 @@ pub fn render_page(
         .draw(display)?;
     }
 
-    if let Some(page) = session.current_cached_page() {
-        let line_step = i32::from(body_style.line_height()) + 2;
-        let first_baseline = body.text.top + i32::from(body_style.line_height());
+    if session.unicode_fonts.missing_required(session.scripts) {
+        let baseline = body.text.top + i32::from(ui_body.line_height());
+        Text::new(
+            "Indic page font unavailable; check monitor",
+            Point::new(body.text.left, baseline),
+            ui_body,
+        )
+        .draw_clipped(display, body.text)?;
+        Text::new(
+            "Regenerate/install FONTS.TXT and .RWF packs",
+            Point::new(
+                body.text.left,
+                baseline + i32::from(ui_body.line_height()) + 8,
+            ),
+            ui_body,
+        )
+        .draw_clipped(display, body.text)?;
+    } else if let Some(page) = session.current_cached_page() {
+        let line_height = session.unicode_fonts.line_height(body_style.line_height());
+        let line_step = i32::from(line_height) + 2;
+        let first_baseline = body.text.top + i32::from(line_height);
         for (index, line) in page
             .lines
             .iter()
@@ -454,10 +480,17 @@ pub fn render_page(
                 line.paragraph_end,
                 session.layout.paragraph_alignment,
                 body_style,
+                &session.unicode_fonts,
                 body.text,
             );
-            Text::new(rendered.as_str(), Point::new(left, baseline), body_style)
-                .draw_clipped(display, body.text)?;
+            draw_reader_unicode_line(
+                display,
+                rendered.as_str(),
+                Point::new(left, baseline),
+                body_style,
+                &session.unicode_fonts,
+                body.text,
+            )?;
         }
     } else {
         let baseline = body.text.top + i32::from(body_style.line_height());
@@ -675,17 +708,19 @@ fn aligned_reader_line(
     paragraph_end: bool,
     alignment: ParagraphAlignment,
     style: crate::app::typography::UiTextStyle,
+    fonts: &crate::reader_unicode::ReaderUnicodeFonts,
     bounds: TextBounds,
 ) -> (String, i32) {
-    let width = style.text_width(line);
+    let width = reader_line_width(line, style, fonts);
     let available = bounds.width().max(0);
     match alignment {
         ParagraphAlignment::Left => (line.into(), bounds.left),
         ParagraphAlignment::Center => (line.into(), bounds.left + (available - width).max(0) / 2),
         ParagraphAlignment::Right => (line.into(), bounds.left + (available - width).max(0)),
-        ParagraphAlignment::Justified if !paragraph_end => {
-            (justify_reader_line(line, style, available), bounds.left)
-        }
+        ParagraphAlignment::Justified if !paragraph_end => (
+            justify_reader_line(line, style, fonts, available),
+            bounds.left,
+        ),
         ParagraphAlignment::Justified => (line.into(), bounds.left),
     }
 }
@@ -693,6 +728,7 @@ fn aligned_reader_line(
 fn justify_reader_line(
     line: &str,
     style: crate::app::typography::UiTextStyle,
+    fonts: &crate::reader_unicode::ReaderUnicodeFonts,
     available: i32,
 ) -> String {
     let words: Vec<&str> = line.split_whitespace().collect();
@@ -701,7 +737,8 @@ fn justify_reader_line(
     }
     let base = words.join(" ");
     let space = style.text_width(" ").max(1);
-    let extra_spaces = ((available - style.text_width(base.as_str())).max(0) / space) as usize;
+    let extra_spaces =
+        ((available - reader_line_width(base.as_str(), style, fonts)).max(0) / space) as usize;
     let gaps = words.len() - 1;
     let mut output = String::new();
     for (index, word) in words.iter().enumerate() {
@@ -815,6 +852,7 @@ mod tests {
             BookFormat, ParagraphAlignment, PendingReaderOpen, ReaderBook, ReaderChapterPageLabel,
             ReaderLibraryEntry, ReaderLibraryTab, ReaderLoadingStage, ReaderLocation,
         },
+        reader_unicode::ReaderUnicodeFonts,
     };
 
     #[test]
@@ -944,17 +982,31 @@ mod tests {
     fn paragraph_alignment_moves_or_justifies_reader_lines_inside_bounds() {
         let style = AppState::default().display.body_style();
         let bounds = crate::app::typography::TextBounds::new(20, 0, 220, 100);
-        let (_, left) =
-            aligned_reader_line("short line", true, ParagraphAlignment::Left, style, bounds);
+        let fonts = ReaderUnicodeFonts::default();
+        let (_, left) = aligned_reader_line(
+            "short line",
+            true,
+            ParagraphAlignment::Left,
+            style,
+            &fonts,
+            bounds,
+        );
         let (_, center) = aligned_reader_line(
             "short line",
             true,
             ParagraphAlignment::Center,
             style,
+            &fonts,
             bounds,
         );
-        let (_, right) =
-            aligned_reader_line("short line", true, ParagraphAlignment::Right, style, bounds);
+        let (_, right) = aligned_reader_line(
+            "short line",
+            true,
+            ParagraphAlignment::Right,
+            style,
+            &fonts,
+            bounds,
+        );
         assert!(left < center);
         assert!(center < right);
         let (justified, _) = aligned_reader_line(
@@ -962,6 +1014,7 @@ mod tests {
             false,
             ParagraphAlignment::Justified,
             style,
+            &fonts,
             bounds,
         );
         assert!(justified.len() > "one two three".len());

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rustmix Wave Indic Font Pack Builder</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 920px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
+    fieldset { margin: 1rem 0; padding: 1rem; }
+    label { display: block; margin: .6rem 0; }
+    button { padding: .7rem 1rem; font-weight: 600; }
+    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; }
+    .note { border-left: 4px solid #555; padding-left: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Rustmix Wave Indic Font Pack Builder</h1>
+  <p>This local browser tool generates SD-card Reader packs for Devanagari and Gujarati EPUB text. Font files stay in your browser and are not uploaded.</p>
+  <p class="note">Use <strong>Noto Sans Devanagari</strong> and <strong>Noto Sans Gujarati</strong>. First extract a UTF-8 corpus from the EPUB files with <code>scripts/extract-epub-font-corpus.py</code>, then select that corpus below. The tool downloads one ZIP so browser multiple-download blocking cannot omit pack files.</p>
+  <fieldset>
+    <legend>Local font files</legend>
+    <label>Noto Sans Devanagari TTF / OTF <input id="devanagariFont" type="file" accept=".ttf,.otf"></label>
+    <label>Noto Sans Gujarati TTF / OTF <input id="gujaratiFont" type="file" accept=".ttf,.otf"></label>
+  </fieldset>
+  <fieldset>
+    <legend>UTF-8 corpus files</legend>
+    <label>Extracted corpus text <input id="corpora" type="file" accept=".txt,text/plain" multiple></label>
+    <p>The builder includes standalone script codepoints and corpus-specific shaped clusters so conjuncts, matras and Gujarati clusters render correctly on the device.</p>
+  </fieldset>
+  <fieldset>
+    <legend>E-paper raster weight</legend>
+    <label>1-bit alpha threshold
+      <select id="alphaThreshold">
+        <option value="128">128 — darker</option>
+        <option value="160" selected>160 — balanced light</option>
+        <option value="192">192 — lightest</option>
+      </select>
+    </label>
+    <p>Higher values discard more anti-aliased edge pixels and create a lighter 1-bit glyph. Start with 160 for Noto Sans Regular.</p>
+  </fieldset>
+  <button id="build">Generate one ZIP with all .RWF packs</button>
+  <pre id="status">Waiting for local inputs.</pre>
+  <script src="zip_store.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

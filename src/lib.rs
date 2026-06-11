@@ -30,6 +30,7 @@ pub mod power;
 pub mod power_key;
 pub mod power_key_menu;
 pub mod reader;
+pub mod reader_unicode;
 pub mod regional;
 pub mod rtc;
 pub mod rtc_alarm_interrupt;

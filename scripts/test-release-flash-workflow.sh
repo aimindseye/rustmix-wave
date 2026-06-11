@@ -11,18 +11,32 @@ mkdir -p "$FIXTURE/scripts" "$FAKEBIN"
 cp "$ROOT/Cargo.toml" "$FIXTURE/Cargo.toml"
 cp "$ROOT/scripts/build-release-firmware.sh" "$FIXTURE/scripts/build-release-firmware.sh"
 cp "$ROOT/scripts/flash-release.sh" "$FIXTURE/scripts/flash-release.sh"
+cp "$ROOT/scripts/resolve-built-elf.sh" "$FIXTURE/scripts/resolve-built-elf.sh"
 chmod +x "$FIXTURE/scripts/"*.sh
 
 cat > "$FAKEBIN/cargo" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == '+esp build --release' ]]; then
-  mkdir -p target/xtensa-esp32s3-espidf/release
-  printf 'dummy-release-elf\n' > target/xtensa-esp32s3-espidf/release/waveshare-epd397-rust-app
-  exit 0
-fi
-echo "fake cargo unexpected arguments: $*" >&2
-exit 1
+if [[ "${1:-}" == '+esp' ]]; then shift; fi
+case "${1:-}" in
+  build)
+    shift
+    args=" $* "
+    if [[ "$args" != *" --target xtensa-esp32s3-espidf "* ]]; then
+      echo 'fake cargo missing explicit embedded target' >&2
+      exit 3
+    fi
+    mkdir -p target/xtensa-esp32s3-espidf/release
+    ELF="$PWD/target/xtensa-esp32s3-espidf/release/waveshare-epd397-rust-app"
+    printf 'dummy-release-elf\n' > "$ELF"
+    printf '{"reason":"compiler-artifact","target":{"kind":["bin"],"name":"waveshare-epd397-rust-app"},"executable":"%s"}\n' "$ELF"
+    printf '{"reason":"build-finished","success":true}\n'
+    ;;
+  *)
+    echo "fake cargo unexpected arguments: $*" >&2
+    exit 1
+    ;;
+esac
 SH
 chmod +x "$FAKEBIN/cargo"
 
@@ -38,7 +52,12 @@ chmod +x "$FAKEBIN/espflash"
   PATH="$FAKEBIN:$PATH" ./scripts/build-release-firmware.sh --skip-validate
 )
 
-PREFIX="$FIXTURE/dist/waveshare-epd397-rust-app-v1.0.0"
+VERSION="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' "$FIXTURE/Cargo.toml" | head -n 1)"
+[[ -n "$VERSION" ]] || {
+  echo 'release-flash-workflow-selftest=failed reason=version-unavailable' >&2
+  exit 1
+}
+PREFIX="$FIXTURE/dist/waveshare-epd397-rust-app-v${VERSION}"
 for required in \
   "$PREFIX.elf" \
   "$PREFIX-flash-release.sh" \
@@ -61,7 +80,7 @@ if unzip -Z1 "$PREFIX-firmware-release.zip" | grep -q -- '-flash.bin$'; then
   exit 1
 fi
 
-grep -Fq 'espflash flash --chip esp32s3 --monitor waveshare-epd397-rust-app-v1.0.0.elf' "$PREFIX-FLASHING.txt"
+grep -Fq "espflash flash --chip esp32s3 --monitor waveshare-epd397-rust-app-v${VERSION}.elf" "$PREFIX-FLASHING.txt"
 grep -Fq 'Do not flash this release with espflash write-bin.' "$PREFIX-FLASHING.txt"
 
 PATH="$FAKEBIN:$PATH" "$FIXTURE/scripts/flash-release.sh" "$PREFIX.elf"
