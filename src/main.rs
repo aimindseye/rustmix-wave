@@ -7,6 +7,11 @@ mod firmware {
 
     use anyhow::Result;
     use embedded_hal::delay::DelayNs;
+    #[cfg(feature = "rustmix-remote-ble")]
+    use esp_idf_svc::{
+        bt::{Ble, BtDriver},
+        nvs::EspDefaultNvsPartition,
+    };
     use esp_idf_svc::{
         fs::fatfs::Fatfs,
         hal::{
@@ -33,6 +38,10 @@ mod firmware {
         sys,
     };
     use log::{info, warn};
+    #[cfg(feature = "rustmix-remote-ble")]
+    use waveshare_epd397_rust_app::rustmix_remote::{
+        ble_gatt::RustmixRemoteBleGattService, RemoteEvent, RemoteEventQueue,
+    };
     use waveshare_epd397_rust_app::{
         alarm::{AlarmEngine, AlarmSnapshot, AlarmUiOutcome, ALARMS_CONFIG_PATH},
         app::{
@@ -116,6 +125,9 @@ mod firmware {
         );
 
         let peripherals = Peripherals::take()?;
+
+        #[cfg(feature = "rustmix-remote-ble")]
+        let rustmix_remote_queue = RemoteEventQueue::default();
 
         // The uploaded Waveshare sample uses SDMMC in 4-bit mode:
         // CMD GPIO17, CLK GPIO16, D0 GPIO15, D1 GPIO7, D2 GPIO8, D3 GPIO18.
@@ -461,6 +473,45 @@ mod firmware {
         // Start optional networking only after the first e-paper frame is
         // visible. A missing config or failed association never blocks shell
         // startup. Keep the runtime alive so Wi-Fi and SNTP remain active.
+        //
+        // Rustmix Remote BLE r1 is deliberately feature-gated and default-off.
+        // In the r1 feature build, BLE owns the ESP32-S3 modem so Wi-Fi startup
+        // is skipped. This keeps the accepted default firmware path unchanged
+        // while validating the BLE GATT command path first.
+        #[cfg(feature = "rustmix-remote-ble")]
+        let (mut network_runtime, _rustmix_remote_ble) = {
+            let ble_service = (|| -> Result<RustmixRemoteBleGattService> {
+                let nvs = EspDefaultNvsPartition::take()?;
+                let bt = std::sync::Arc::new(BtDriver::new(peripherals.modem, Some(nvs.clone()))?);
+                RustmixRemoteBleGattService::start(bt, rustmix_remote_queue.clone())
+            })();
+            let ble_service = match ble_service {
+                Ok(service) => {
+                    info!(
+                        "rustmix-wave=rustmix-remote-ble status=ready feature=rustmix-remote-ble"
+                    );
+                    Some(service)
+                }
+                Err(error) => {
+                    warn!("rustmix-wave=rustmix-remote-ble status=unavailable feature=rustmix-remote-ble error={error:#}");
+                    None
+                }
+            };
+            let runtime = if let Some(config) = network_config.as_ref() {
+                warn!(
+                    "rustmix-wave=wifi-connect status=skipped ssid={} reason=rustmix-remote-ble-r1-owns-modem",
+                    config.ssid
+                );
+                NetworkRuntime::failed(
+                    config,
+                    "Rustmix Remote BLE r1 owns the modem; Wi-Fi disabled in this feature build",
+                )
+            } else {
+                NetworkRuntime::configuration_missing()
+            };
+            (runtime, ble_service)
+        };
+        #[cfg(not(feature = "rustmix-remote-ble"))]
         let mut network_runtime = if let Some(config) = network_config.as_ref() {
             info!(
                 "rustmix-wave=wifi-connect status=starting ssid={}",
@@ -1534,6 +1585,76 @@ mod firmware {
                     }
                 }
                 None => {}
+            }
+
+            #[cfg(feature = "rustmix-remote-ble")]
+            while let Some(remote_event) = rustmix_remote_queue.pop() {
+                info!(
+                    "rustmix-wave=rustmix-remote-event event={} route={}",
+                    remote_event.marker(),
+                    state.active_route().marker()
+                );
+                if sleep_mode.is_sleeping() {
+                    info!(
+                        "rustmix-wave=rustmix-remote-event action=suppressed reason=sleeping event={}",
+                        remote_event.marker()
+                    );
+                    continue;
+                }
+                let Some(event) = (match remote_event {
+                    RemoteEvent::PageNext => Some(ButtonEvent::Down),
+                    RemoteEvent::PagePrevious => Some(ButtonEvent::Up),
+                    _ => None,
+                }) else {
+                    info!(
+                        "rustmix-wave=rustmix-remote-event action=ignored reason=unsupported-r1 event={}",
+                        remote_event.marker()
+                    );
+                    continue;
+                };
+                if state.active_route() != ScreenRoute::ReaderPage {
+                    info!(
+                        "rustmix-wave=rustmix-remote-event action=ignored reason=route-not-reader-page event={} route={}",
+                        remote_event.marker(),
+                        state.active_route().marker()
+                    );
+                    continue;
+                }
+
+                let woke_from_sleep = !state.panel_awake;
+                if woke_from_sleep {
+                    panel.initialize()?;
+                    state.panel_awake = true;
+                    panel_refresh.reset_after_external_global(PanelGlobalReason::AfterWake);
+                    sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
+                }
+
+                let previous_route = state.active_route();
+                state.apply(event);
+                log_reader_persistence_event(&mut state);
+                if state.active_route() != previous_route {
+                    info!(
+                        "rustmix-wave=screen-route route={} cause=rustmix-remote",
+                        state.active_route().marker()
+                    );
+                }
+                let reader_clear_ghost = state.take_reader_clear_ghost_request();
+                let request = if woke_from_sleep {
+                    RefreshRequest::ForceGlobalAfterWake
+                } else if reader_clear_ghost {
+                    RefreshRequest::ForceGlobalManual
+                } else {
+                    RefreshRequest::Normal
+                };
+                refresh_screen(
+                    &mut panel,
+                    &mut frame,
+                    &mut state,
+                    &mut panel_refresh,
+                    request,
+                )?;
+                last_activity = Instant::now();
+                last_status_refresh = Instant::now();
             }
 
             if let Some(event) = buttons.poll(&mut button_delay)? {

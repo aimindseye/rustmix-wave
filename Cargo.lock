@@ -1639,6 +1639,7 @@ dependencies = [
  "embedded-hal 1.0.0",
  "embedded-svc",
  "embuild",
+ "enumset",
  "es8311",
  "esp-idf-svc",
  "log",

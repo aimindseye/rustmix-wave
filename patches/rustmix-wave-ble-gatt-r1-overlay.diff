@@ -1,0 +1,1282 @@
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/Cargo.toml rustmix_wave_r3_work/Cargo.toml
+--- rustmix_wave_inspect/rustmix-wave-upload/Cargo.toml	2026-07-03 19:11:37.000000000 +0000
++++ rustmix_wave_r3_work/Cargo.toml	2026-07-03 20:36:59.010892390 +0000
+@@ -16,6 +16,12 @@
+ debug = true
+ opt-level = "z"
+ 
++[features]
++default = []
++# Enables the ESP-IDF Bluedroid BLE GATT service for Rustmix Remote.
++# r1 intentionally gives BLE ownership of the modem and disables Wi-Fi startup.
++rustmix-remote-ble = ["enumset"]
++
+ [profile.release]
+ codegen-units = 1
+ lto = true
+@@ -27,6 +33,7 @@
+ embedded-graphics = "0.8.1"
+ embedded-hal = "1.0"
+ log = "0.4"
++enumset = { version = "1", optional = true }
+ miniz_oxide = "0.8"
+ 
+ [target.'cfg(target_os = "espidf")'.dependencies]
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/README_RUSTMIX_REMOTE_BLE_R1.md rustmix_wave_r3_work/README_RUSTMIX_REMOTE_BLE_R1.md
+--- rustmix_wave_inspect/rustmix-wave-upload/README_RUSTMIX_REMOTE_BLE_R1.md	1970-01-01 00:00:00.000000000 +0000
++++ rustmix_wave_r3_work/README_RUSTMIX_REMOTE_BLE_R1.md	2026-07-03 20:38:03.639650538 +0000
+@@ -0,0 +1,20 @@
++# Rustmix Remote BLE GATT r1 Overlay
++
++This overlay promotes the previous RRBP parser scaffold into a feature-gated
++Rustmix-Wave BLE GATT r1 service.
++
++## What changes
++
++- Adds live `src/rustmix_remote` module.
++- Adds `rustmix-remote-ble` Cargo feature.
++- Adds ESP-IDF Bluedroid GATT server module behind that feature.
++- Adds a `RemoteEventQueue` callback boundary.
++- Wires main loop to consume only `PageNext` and `PagePrevious` while on the
++  Reader page.
++- Leaves default firmware builds unchanged.
++
++## r1 limitation
++
++When built with `--features rustmix-remote-ble`, BLE owns `peripherals.modem`, so
++Wi-Fi/network services are skipped in that feature build. Default builds are not
++changed.
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/docs/rustmix-remote/ble-gatt-r1.md rustmix_wave_r3_work/docs/rustmix-remote/ble-gatt-r1.md
+--- rustmix_wave_inspect/rustmix-wave-upload/docs/rustmix-remote/ble-gatt-r1.md	1970-01-01 00:00:00.000000000 +0000
++++ rustmix_wave_r3_work/docs/rustmix-remote/ble-gatt-r1.md	2026-07-03 20:38:03.633075467 +0000
+@@ -0,0 +1,106 @@
++# Rustmix-Wave BLE GATT Service r1
++
++## Goal
++
++Expose a feature-gated BLE GATT service named `Rustmix Remote` on Rustmix-Wave.
++The Wear OS app writes 6-byte RRBP v1 packets to the command characteristic.
++Firmware parses the packet, enqueues a `RemoteEvent`, and the main loop drains
++that queue safely.
++
++## Safety policy
++
++BLE callbacks must not mutate reader/UI state. The callback only:
++
++1. checks the target characteristic handle;
++2. parses the 6-byte RRBP packet;
++3. enqueues a `RemoteEvent`; and
++4. returns.
++
++The main firmware loop owns all UI transitions and display refreshes.
++
++## r1 scope
++
++Implemented r1 commands:
++
++- `PageNext` maps to the existing `ButtonEvent::Down` reader-page action.
++- `PagePrevious` maps to the existing `ButtonEvent::Up` reader-page action.
++
++Ignored in r1:
++
++- Select
++- Back
++- Menu
++- Sleep
++- Wake
++- Scroll
++- Bookmark
++- Refresh
++
++Unsupported commands are logged and ignored.
++
++## Feature flag
++
++The BLE code is compiled only with:
++
++```bash
++cargo build --release --features rustmix-remote-ble
++```
++
++Default builds do not compile or start the BLE GATT service.
++
++## Modem ownership in r1
++
++Rustmix-Wave currently uses `peripherals.modem` for Wi-Fi through
++`NetworkRuntime::connect(...)`. The ESP-IDF BLE wrapper also needs the modem.
++For this r1 hardware validation build, `--features rustmix-remote-ble` gives BLE
++ownership of the modem and skips Wi-Fi startup.
++
++This is intentional for r1 so default firmware behavior remains unchanged.
++A later r2 can revisit Wi-Fi/BLE coexistence or a runtime mode switch.
++
++## GATT layout
++
++Service UUID:
++
++```text
++8f7a0000-6b8f-4a91-9e2c-727573740001
++```
++
++Command characteristic UUID:
++
++```text
++8f7a0001-6b8f-4a91-9e2c-727573740001
++```
++
++Command payload length:
++
++```text
++6 bytes
++```
++
++## RRBP command payload
++
++```text
++Byte 0: version, always 0x01 for RRBP v1
++Byte 1: sequence
++Byte 2: command
++Byte 3: flags
++Byte 4: parameter
++Byte 5: reserved
++```
++
++## Test commands from watch/client
++
++```text
++01 00 01 00 00 00  # page next
++01 01 02 00 00 00  # page previous
++```
++
++## Expected logs
++
++```text
++rustmix-wave=rustmix-remote-ble status=ready feature=rustmix-remote-ble
++rustmix-wave=rustmix-remote-ble status=advertising name=Rustmix Remote
++rustmix-wave=rustmix-remote-command status=enqueued ... bytes=[01, 00, 01, 00, 00, 00]
++rustmix-wave=rustmix-remote-event event=page-next route=reader-page
++```
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/patches/rustmix-wave-ble-gatt-r1-overlay.diff rustmix_wave_r3_work/patches/rustmix-wave-ble-gatt-r1-overlay.diff
+--- rustmix_wave_inspect/rustmix-wave-upload/patches/rustmix-wave-ble-gatt-r1-overlay.diff	1970-01-01 00:00:00.000000000 +0000
++++ rustmix_wave_r3_work/patches/rustmix-wave-ble-gatt-r1-overlay.diff	2026-07-03 20:38:57.333752304 +0000
+@@ -0,0 +1,158 @@
++diff -ruN rustmix_wave_inspect/rustmix-wave-upload/Cargo.toml rustmix_wave_r3_work/Cargo.toml
++--- rustmix_wave_inspect/rustmix-wave-upload/Cargo.toml	2026-07-03 19:11:37.000000000 +0000
+++++ rustmix_wave_r3_work/Cargo.toml	2026-07-03 20:36:59.010892390 +0000
++@@ -16,6 +16,12 @@
++ debug = true
++ opt-level = "z"
++ 
+++[features]
+++default = []
+++# Enables the ESP-IDF Bluedroid BLE GATT service for Rustmix Remote.
+++# r1 intentionally gives BLE ownership of the modem and disables Wi-Fi startup.
+++rustmix-remote-ble = ["enumset"]
+++
++ [profile.release]
++ codegen-units = 1
++ lto = true
++@@ -27,6 +33,7 @@
++ embedded-graphics = "0.8.1"
++ embedded-hal = "1.0"
++ log = "0.4"
+++enumset = { version = "1", optional = true }
++ miniz_oxide = "0.8"
++ 
++ [target.'cfg(target_os = "espidf")'.dependencies]
++diff -ruN rustmix_wave_inspect/rustmix-wave-upload/README_RUSTMIX_REMOTE_BLE_R1.md rustmix_wave_r3_work/README_RUSTMIX_REMOTE_BLE_R1.md
++--- rustmix_wave_inspect/rustmix-wave-upload/README_RUSTMIX_REMOTE_BLE_R1.md	1970-01-01 00:00:00.000000000 +0000
+++++ rustmix_wave_r3_work/README_RUSTMIX_REMOTE_BLE_R1.md	2026-07-03 20:38:03.639650538 +0000
++@@ -0,0 +1,20 @@
+++# Rustmix Remote BLE GATT r1 Overlay
+++
+++This overlay promotes the previous RRBP parser scaffold into a feature-gated
+++Rustmix-Wave BLE GATT r1 service.
+++
+++## What changes
+++
+++- Adds live `src/rustmix_remote` module.
+++- Adds `rustmix-remote-ble` Cargo feature.
+++- Adds ESP-IDF Bluedroid GATT server module behind that feature.
+++- Adds a `RemoteEventQueue` callback boundary.
+++- Wires main loop to consume only `PageNext` and `PagePrevious` while on the
+++  Reader page.
+++- Leaves default firmware builds unchanged.
+++
+++## r1 limitation
+++
+++When built with `--features rustmix-remote-ble`, BLE owns `peripherals.modem`, so
+++Wi-Fi/network services are skipped in that feature build. Default builds are not
+++changed.
++diff -ruN rustmix_wave_inspect/rustmix-wave-upload/docs/rustmix-remote/ble-gatt-r1.md rustmix_wave_r3_work/docs/rustmix-remote/ble-gatt-r1.md
++--- rustmix_wave_inspect/rustmix-wave-upload/docs/rustmix-remote/ble-gatt-r1.md	1970-01-01 00:00:00.000000000 +0000
+++++ rustmix_wave_r3_work/docs/rustmix-remote/ble-gatt-r1.md	2026-07-03 20:38:03.633075467 +0000
++@@ -0,0 +1,106 @@
+++# Rustmix-Wave BLE GATT Service r1
+++
+++## Goal
+++
+++Expose a feature-gated BLE GATT service named `Rustmix Remote` on Rustmix-Wave.
+++The Wear OS app writes 6-byte RRBP v1 packets to the command characteristic.
+++Firmware parses the packet, enqueues a `RemoteEvent`, and the main loop drains
+++that queue safely.
+++
+++## Safety policy
+++
+++BLE callbacks must not mutate reader/UI state. The callback only:
+++
+++1. checks the target characteristic handle;
+++2. parses the 6-byte RRBP packet;
+++3. enqueues a `RemoteEvent`; and
+++4. returns.
+++
+++The main firmware loop owns all UI transitions and display refreshes.
+++
+++## r1 scope
+++
+++Implemented r1 commands:
+++
+++- `PageNext` maps to the existing `ButtonEvent::Down` reader-page action.
+++- `PagePrevious` maps to the existing `ButtonEvent::Up` reader-page action.
+++
+++Ignored in r1:
+++
+++- Select
+++- Back
+++- Menu
+++- Sleep
+++- Wake
+++- Scroll
+++- Bookmark
+++- Refresh
+++
+++Unsupported commands are logged and ignored.
+++
+++## Feature flag
+++
+++The BLE code is compiled only with:
+++
+++```bash
+++cargo build --release --features rustmix-remote-ble
+++```
+++
+++Default builds do not compile or start the BLE GATT service.
+++
+++## Modem ownership in r1
+++
+++Rustmix-Wave currently uses `peripherals.modem` for Wi-Fi through
+++`NetworkRuntime::connect(...)`. The ESP-IDF BLE wrapper also needs the modem.
+++For this r1 hardware validation build, `--features rustmix-remote-ble` gives BLE
+++ownership of the modem and skips Wi-Fi startup.
+++
+++This is intentional for r1 so default firmware behavior remains unchanged.
+++A later r2 can revisit Wi-Fi/BLE coexistence or a runtime mode switch.
+++
+++## GATT layout
+++
+++Service UUID:
+++
+++```text
+++8f7a0000-6b8f-4a91-9e2c-727573740001
+++```
+++
+++Command characteristic UUID:
+++
+++```text
+++8f7a0001-6b8f-4a91-9e2c-727573740001
+++```
+++
+++Command payload length:
+++
+++```text
+++6 bytes
+++```
+++
+++## RRBP command payload
+++
+++```text
+++Byte 0: version, always 0x01 for RRBP v1
+++Byte 1: sequence
+++Byte 2: command
+++Byte 3: flags
+++Byte 4: parameter
+++Byte 5: reserved
+++```
+++
+++## Test commands from watch/client
+++
+++```text
+++01 00 01 00 00 00  # page next
+++01 01 02 00 00 00  # page previous
+++```
+++
+++## Expected logs
+++
+++```text
+++rustmix-wave=rustmix-remote-ble status=ready feature=rustmix-remote-ble
+++rustmix-wave=rustmix-remote-ble status=advertising name=Rustmix Remote
+++rustmix-wave=rustmix-remote-command status=enqueued ... bytes=[01, 00, 01, 00, 00, 00]
+++rustmix-wave=rustmix-remote-event event=page-next route=reader-page
+++```
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/scripts/build_rustmix_remote_ble_r1.sh rustmix_wave_r3_work/scripts/build_rustmix_remote_ble_r1.sh
+--- rustmix_wave_inspect/rustmix-wave-upload/scripts/build_rustmix_remote_ble_r1.sh	1970-01-01 00:00:00.000000000 +0000
++++ rustmix_wave_r3_work/scripts/build_rustmix_remote_ble_r1.sh	2026-07-03 20:38:57.195158677 +0000
+@@ -0,0 +1,20 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++cd "$ROOT"
++
++if ! grep -q 'CONFIG_BT_ENABLED=y' sdkconfig.defaults 2>/dev/null; then
++  cat <<'MSG'
++ERROR: sdkconfig.defaults does not include BLE defaults yet.
++
++Apply them first with:
++
++  cat sdkconfig.defaults.rustmix-remote-ble >> sdkconfig.defaults
++
++or manually merge the BLE section.
++MSG
++  exit 1
++fi
++
++cargo +esp build --release --features rustmix-remote-ble
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/scripts/validate_rustmix_remote_ble_r1.sh rustmix_wave_r3_work/scripts/validate_rustmix_remote_ble_r1.sh
+--- rustmix_wave_inspect/rustmix-wave-upload/scripts/validate_rustmix_remote_ble_r1.sh	1970-01-01 00:00:00.000000000 +0000
++++ rustmix_wave_r3_work/scripts/validate_rustmix_remote_ble_r1.sh	2026-07-03 20:38:03.645866598 +0000
+@@ -0,0 +1,37 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++cd "$ROOT"
++
++required=(
++  "src/rustmix_remote/mod.rs"
++  "src/rustmix_remote/rrbp.rs"
++  "src/rustmix_remote/queue.rs"
++  "src/rustmix_remote/bridge.rs"
++  "src/rustmix_remote/ble_gatt.rs"
++  "docs/rustmix-remote/ble-gatt-r1.md"
++  "sdkconfig.defaults.rustmix-remote-ble"
++)
++
++for f in "${required[@]}"; do
++  if [ ! -f "$f" ]; then
++    echo "Missing required file: $f" >&2
++    exit 1
++  fi
++done
++
++grep -q 'rustmix-remote-ble' Cargo.toml
++grep -q 'pub mod rustmix_remote;' src/lib.rs
++grep -q 'RustmixRemoteBleGattService' src/main.rs
++grep -q 'rustmix_remote_queue.pop' src/main.rs
++grep -q 'RUSTMIX_REMOTE_SERVICE_UUID' src/rustmix_remote/ble_gatt.rs
++
++if command -v cargo >/dev/null 2>&1; then
++  echo "Running host tests for rustmix_remote module..."
++  cargo test rustmix_remote --lib
++else
++  echo "cargo not found; static validation only"
++fi
++
++echo "Rustmix Remote BLE GATT r1 validation: OK"
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/sdkconfig.defaults.rustmix-remote-ble rustmix_wave_r3_work/sdkconfig.defaults.rustmix-remote-ble
+--- rustmix_wave_inspect/rustmix-wave-upload/sdkconfig.defaults.rustmix-remote-ble	1970-01-01 00:00:00.000000000 +0000
++++ rustmix_wave_r3_work/sdkconfig.defaults.rustmix-remote-ble	2026-07-03 20:38:03.625299551 +0000
+@@ -0,0 +1,13 @@
++# Optional Rustmix Remote BLE GATT r1 defaults.
++# Apply only for BLE test builds. The normal sdkconfig.defaults remains Wi-Fi-first.
++# Based on the esp-idf-svc Bluedroid GATT server example recommendations.
++CONFIG_BT_ENABLED=y
++CONFIG_BT_BLUEDROID_ENABLED=y
++CONFIG_BT_CLASSIC_ENABLED=n
++CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
++CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=n
++CONFIG_BTDM_CTRL_MODE_BTDM=n
++CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
++CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
++CONFIG_BT_BTC_TASK_STACK_SIZE=15000
++CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=y
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/src/lib.rs rustmix_wave_r3_work/src/lib.rs
+--- rustmix_wave_inspect/rustmix-wave-upload/src/lib.rs	2026-07-03 19:11:39.000000000 +0000
++++ rustmix_wave_r3_work/src/lib.rs	2026-07-03 20:36:59.011261504 +0000
+@@ -33,6 +33,7 @@
+ pub mod regional;
+ pub mod rtc;
+ pub mod rtc_alarm_interrupt;
++pub mod rustmix_remote;
+ pub mod runtime_memory;
+ pub mod runtime_worker;
+ pub mod shared_i2c;
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/src/main.rs rustmix_wave_r3_work/src/main.rs
+--- rustmix_wave_inspect/rustmix-wave-upload/src/main.rs	2026-07-03 19:11:39.000000000 +0000
++++ rustmix_wave_r3_work/src/main.rs	2026-07-03 20:37:35.278587068 +0000
+@@ -33,6 +33,8 @@
+         sys,
+     };
+     use log::{info, warn};
++    #[cfg(feature = "rustmix-remote-ble")]
++    use esp_idf_svc::{bt::{Ble, BtDriver}, nvs::EspDefaultNvsPartition};
+     use waveshare_epd397_rust_app::{
+         alarm::{AlarmEngine, AlarmSnapshot, AlarmUiOutcome, ALARMS_CONFIG_PATH},
+         app::{
+@@ -106,6 +108,10 @@
+             WIFI_TRANSFER_INACTIVITY_SECONDS, WIFI_TRANSFER_ROOT, WIFI_TRANSFER_SERVER_STACK_BYTES,
+         },
+     };
++    #[cfg(feature = "rustmix-remote-ble")]
++    use waveshare_epd397_rust_app::rustmix_remote::{
++        ble_gatt::RustmixRemoteBleGattService, RemoteEvent, RemoteEventQueue,
++    };
+ 
+     pub fn run() -> Result<()> {
+         sys::link_patches();
+@@ -117,6 +123,9 @@
+ 
+         let peripherals = Peripherals::take()?;
+ 
++        #[cfg(feature = "rustmix-remote-ble")]
++        let rustmix_remote_queue = RemoteEventQueue::default();
++
+         // The uploaded Waveshare sample uses SDMMC in 4-bit mode:
+         // CMD GPIO17, CLK GPIO16, D0 GPIO15, D1 GPIO7, D2 GPIO8, D3 GPIO18.
+         // Mount failure is non-fatal so the verified product shell still boots
+@@ -461,6 +470,43 @@
+         // Start optional networking only after the first e-paper frame is
+         // visible. A missing config or failed association never blocks shell
+         // startup. Keep the runtime alive so Wi-Fi and SNTP remain active.
++        //
++        // Rustmix Remote BLE r1 is deliberately feature-gated and default-off.
++        // In the r1 feature build, BLE owns the ESP32-S3 modem so Wi-Fi startup
++        // is skipped. This keeps the accepted default firmware path unchanged
++        // while validating the BLE GATT command path first.
++        #[cfg(feature = "rustmix-remote-ble")]
++        let (mut network_runtime, _rustmix_remote_ble) = {
++            let ble_service = (|| -> Result<RustmixRemoteBleGattService> {
++                let nvs = EspDefaultNvsPartition::take()?;
++                let bt = std::sync::Arc::new(BtDriver::new(peripherals.modem, Some(nvs.clone()))?);
++                RustmixRemoteBleGattService::start(bt, rustmix_remote_queue.clone())
++            })();
++            let ble_service = match ble_service {
++                Ok(service) => {
++                    info!("rustmix-wave=rustmix-remote-ble status=ready feature=rustmix-remote-ble");
++                    Some(service)
++                }
++                Err(error) => {
++                    warn!("rustmix-wave=rustmix-remote-ble status=unavailable feature=rustmix-remote-ble error={error:#}");
++                    None
++                }
++            };
++            let runtime = if let Some(config) = network_config.as_ref() {
++                warn!(
++                    "rustmix-wave=wifi-connect status=skipped ssid={} reason=rustmix-remote-ble-r1-owns-modem",
++                    config.ssid
++                );
++                NetworkRuntime::failed(
++                    config,
++                    "Rustmix Remote BLE r1 owns the modem; Wi-Fi disabled in this feature build",
++                )
++            } else {
++                NetworkRuntime::configuration_missing()
++            };
++            (runtime, ble_service)
++        };
++        #[cfg(not(feature = "rustmix-remote-ble"))]
+         let mut network_runtime = if let Some(config) = network_config.as_ref() {
+             info!(
+                 "rustmix-wave=wifi-connect status=starting ssid={}",
+@@ -1536,6 +1582,76 @@
+                 None => {}
+             }
+ 
++            #[cfg(feature = "rustmix-remote-ble")]
++            while let Some(remote_event) = rustmix_remote_queue.pop() {
++                info!(
++                    "rustmix-wave=rustmix-remote-event event={} route={}",
++                    remote_event.marker(),
++                    state.active_route().marker()
++                );
++                if sleep_mode.is_sleeping() {
++                    info!(
++                        "rustmix-wave=rustmix-remote-event action=suppressed reason=sleeping event={}",
++                        remote_event.marker()
++                    );
++                    continue;
++                }
++                let Some(event) = (match remote_event {
++                    RemoteEvent::PageNext => Some(ButtonEvent::Down),
++                    RemoteEvent::PagePrevious => Some(ButtonEvent::Up),
++                    _ => None,
++                }) else {
++                    info!(
++                        "rustmix-wave=rustmix-remote-event action=ignored reason=unsupported-r1 event={}",
++                        remote_event.marker()
++                    );
++                    continue;
++                };
++                if state.active_route() != ScreenRoute::ReaderPage {
++                    info!(
++                        "rustmix-wave=rustmix-remote-event action=ignored reason=route-not-reader-page event={} route={}",
++                        remote_event.marker(),
++                        state.active_route().marker()
++                    );
++                    continue;
++                }
++
++                let woke_from_sleep = !state.panel_awake;
++                if woke_from_sleep {
++                    panel.initialize()?;
++                    state.panel_awake = true;
++                    panel_refresh.reset_after_external_global(PanelGlobalReason::AfterWake);
++                    sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
++                }
++
++                let previous_route = state.active_route();
++                state.apply(event);
++                log_reader_persistence_event(&mut state);
++                if state.active_route() != previous_route {
++                    info!(
++                        "rustmix-wave=screen-route route={} cause=rustmix-remote",
++                        state.active_route().marker()
++                    );
++                }
++                let reader_clear_ghost = state.take_reader_clear_ghost_request();
++                let request = if woke_from_sleep {
++                    RefreshRequest::ForceGlobalAfterWake
++                } else if reader_clear_ghost {
++                    RefreshRequest::ForceGlobalManual
++                } else {
++                    RefreshRequest::Normal
++                };
++                refresh_screen(
++                    &mut panel,
++                    &mut frame,
++                    &mut state,
++                    &mut panel_refresh,
++                    request,
++                )?;
++                last_activity = Instant::now();
++                last_status_refresh = Instant::now();
++            }
++
+             if let Some(event) = buttons.poll(&mut button_delay)? {
+                 info!("rustmix-wave=button-event event={event:?}");
+                 if sleep_mode.is_sleeping() {
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/src/rustmix_remote/ble_gatt.rs rustmix_wave_r3_work/src/rustmix_remote/ble_gatt.rs
+--- rustmix_wave_inspect/rustmix-wave-upload/src/rustmix_remote/ble_gatt.rs	1970-01-01 00:00:00.000000000 +0000
++++ rustmix_wave_r3_work/src/rustmix_remote/ble_gatt.rs	2026-07-03 20:38:26.705773383 +0000
+@@ -0,0 +1,310 @@
++//! ESP-IDF Bluedroid BLE GATT server for Rustmix Remote.
++//!
++//! This module is compiled only with `--features rustmix-remote-ble` on ESP-IDF.
++//! The service exposes a single write characteristic for RRBP command packets.
++
++use std::sync::{Arc, Mutex};
++
++use anyhow::Result;
++use enumset::enum_set;
++use esp_idf_svc::{
++    bt::{
++        ble::{
++            gap::{AdvConfiguration, BleGapEvent, EspBleGap},
++            gatt::{
++                server::{ConnectionId, EspGatts, GattsEvent, TransferId},
++                AutoResponse, GattCharacteristic, GattId, GattInterface, GattResponse,
++                GattServiceId, GattStatus, Handle, Permission, Property,
++            },
++        },
++        BdAddr, Ble, BtDriver, BtStatus, BtUuid,
++    },
++    sys::{EspError, ESP_FAIL},
++};
++use log::{info, warn};
++
++use super::{RemoteBridgeWriteOutcome, RemoteEventQueue, RustmixRemoteBridge, RRBP_PACKET_LEN};
++
++const APP_ID: u16 = 0x5252; // "RR" / Rustmix Remote
++
++/// Stable Rustmix Remote service UUID.
++pub const RUSTMIX_REMOTE_SERVICE_UUID: u128 = 0x8f7a_0000_6b8f_4a91_9e2c_7275_7374_0001;
++/// RRBP Command characteristic UUID. Watch writes 6-byte RRBP packets here.
++pub const RUSTMIX_REMOTE_COMMAND_UUID: u128 = 0x8f7a_0001_6b8f_4a91_9e2c_7275_7374_0001;
++
++#[derive(Default)]
++struct ServerState {
++    gatt_if: Option<GattInterface>,
++    service_handle: Option<Handle>,
++    command_handle: Option<Handle>,
++    bridge: Option<RustmixRemoteBridge>,
++    response: GattResponse,
++}
++
++/// Own this value for the life of the firmware. Dropping it would unregister
++/// callbacks and stop BLE remote handling.
++#[derive(Clone)]
++pub struct RustmixRemoteBleGattService {
++    gap: Arc<EspBleGap<'static>>,
++    gatts: Arc<EspGatts<'static>>,
++    state: Arc<Mutex<ServerState>>,
++}
++
++impl RustmixRemoteBleGattService {
++    pub fn start(bt: Arc<BtDriver<'static, Ble>>, queue: RemoteEventQueue) -> Result<Self> {
++        let service = Self {
++            gap: Arc::new(EspBleGap::new(bt.clone())?),
++            gatts: Arc::new(EspGatts::new(bt)?),
++            state: Arc::new(Mutex::new(ServerState {
++                bridge: Some(RustmixRemoteBridge::new(queue)),
++                ..ServerState::default()
++            })),
++        };
++
++        let gap_service = service.clone();
++        service.gap.subscribe(move |event| {
++            gap_service.check_esp_status(gap_service.on_gap_event(event));
++        })?;
++
++        let gatts_service = service.clone();
++        service.gatts.subscribe(move |(gatt_if, event)| {
++            gatts_service.check_esp_status(gatts_service.on_gatts_event(gatt_if, event));
++        })?;
++
++        service.gatts.register_app(APP_ID)?;
++        info!("rustmix-wave=rustmix-remote-ble status=registering app-id={APP_ID}");
++        Ok(service)
++    }
++
++    fn on_gap_event(&self, event: BleGapEvent) -> Result<(), EspError> {
++        info!("rustmix-wave=rustmix-remote-gap event={event:?}");
++        if let BleGapEvent::AdvertisingConfigured(status) = event {
++            self.check_bt_status(status)?;
++            self.gap.start_advertising()?;
++            info!("rustmix-wave=rustmix-remote-ble status=advertising name=Rustmix Remote");
++        }
++        Ok(())
++    }
++
++    fn on_gatts_event(
++        &self,
++        gatt_if: GattInterface,
++        event: GattsEvent,
++    ) -> Result<(), EspError> {
++        info!("rustmix-wave=rustmix-remote-gatts event={event:?}");
++        match event {
++            GattsEvent::ServiceRegistered { status, app_id } => {
++                self.check_gatt_status(status)?;
++                if app_id == APP_ID {
++                    self.create_service(gatt_if)?;
++                }
++            }
++            GattsEvent::ServiceCreated {
++                status,
++                service_handle,
++                ..
++            } => {
++                self.check_gatt_status(status)?;
++                self.configure_and_start_service(service_handle)?;
++            }
++            GattsEvent::CharacteristicAdded {
++                status,
++                attr_handle,
++                service_handle,
++                char_uuid,
++            } => {
++                self.check_gatt_status(status)?;
++                self.register_characteristic(service_handle, attr_handle, char_uuid)?;
++            }
++            GattsEvent::PeerConnected { addr, .. } => {
++                info!("rustmix-wave=rustmix-remote-ble status=connected peer={addr}");
++            }
++            GattsEvent::PeerDisconnected { addr, .. } => {
++                if let Some(bridge) = self.state.lock().unwrap().bridge.as_mut() {
++                    bridge.reset_sequence_tracking();
++                }
++                self.set_adv_conf()?;
++                info!("rustmix-wave=rustmix-remote-ble status=disconnected peer={addr} action=advertise-restart");
++            }
++            GattsEvent::Write {
++                conn_id,
++                trans_id,
++                addr,
++                handle,
++                offset,
++                need_rsp,
++                is_prep,
++                value,
++            } => {
++                let handled = self.handle_write(
++                    gatt_if, conn_id, trans_id, addr, handle, offset, need_rsp, is_prep, value,
++                )?;
++                if handled {
++                    self.send_write_response(
++                        gatt_if, conn_id, trans_id, handle, offset, need_rsp, is_prep, value,
++                    )?;
++                }
++            }
++            _ => {}
++        }
++        Ok(())
++    }
++
++    fn set_adv_conf(&self) -> Result<(), EspError> {
++        self.gap.set_adv_conf(&AdvConfiguration {
++            include_name: true,
++            include_txpower: true,
++            flag: 2,
++            service_uuid: Some(BtUuid::uuid128(RUSTMIX_REMOTE_SERVICE_UUID)),
++            ..Default::default()
++        })
++    }
++
++    fn create_service(&self, gatt_if: GattInterface) -> Result<(), EspError> {
++        self.state.lock().unwrap().gatt_if = Some(gatt_if);
++        self.gap.set_device_name("Rustmix Remote")?;
++        self.set_adv_conf()?;
++        self.gatts.create_service(
++            gatt_if,
++            &GattServiceId {
++                id: GattId {
++                    uuid: BtUuid::uuid128(RUSTMIX_REMOTE_SERVICE_UUID),
++                    inst_id: 0,
++                },
++                is_primary: true,
++            },
++            4,
++        )?;
++        Ok(())
++    }
++
++    fn configure_and_start_service(&self, service_handle: Handle) -> Result<(), EspError> {
++        self.state.lock().unwrap().service_handle = Some(service_handle);
++        self.gatts.start_service(service_handle)?;
++        self.gatts.add_characteristic(
++            service_handle,
++            &GattCharacteristic {
++                uuid: BtUuid::uuid128(RUSTMIX_REMOTE_COMMAND_UUID),
++                permissions: enum_set!(Permission::Write),
++                properties: enum_set!(Property::Write),
++                max_len: RRBP_PACKET_LEN as u16,
++                auto_rsp: AutoResponse::ByApp,
++            },
++            &[],
++        )?;
++        info!("rustmix-wave=rustmix-remote-ble status=service-started command-len={RRBP_PACKET_LEN}");
++        Ok(())
++    }
++
++    fn register_characteristic(
++        &self,
++        service_handle: Handle,
++        attr_handle: Handle,
++        char_uuid: BtUuid,
++    ) -> Result<(), EspError> {
++        let mut state = self.state.lock().unwrap();
++        if state.service_handle == Some(service_handle)
++            && char_uuid == BtUuid::uuid128(RUSTMIX_REMOTE_COMMAND_UUID)
++        {
++            state.command_handle = Some(attr_handle);
++            info!("rustmix-wave=rustmix-remote-ble status=command-characteristic-ready handle={attr_handle:?}");
++        }
++        Ok(())
++    }
++
++    #[allow(clippy::too_many_arguments)]
++    fn handle_write(
++        &self,
++        _gatt_if: GattInterface,
++        _conn_id: ConnectionId,
++        _trans_id: TransferId,
++        addr: BdAddr,
++        handle: Handle,
++        offset: u16,
++        _need_rsp: bool,
++        is_prep: bool,
++        value: &[u8],
++    ) -> Result<bool, EspError> {
++        let mut state = self.state.lock().unwrap();
++        if state.command_handle != Some(handle) {
++            return Ok(false);
++        }
++        if offset != 0 || is_prep {
++            warn!("rustmix-wave=rustmix-remote-command status=ignored reason=prepared-or-offset-write peer={addr} offset={offset} is-prep={is_prep}");
++            return Ok(true);
++        }
++        let Some(bridge) = state.bridge.as_mut() else {
++            warn!("rustmix-wave=rustmix-remote-command status=ignored reason=bridge-missing peer={addr}");
++            return Ok(true);
++        };
++        match bridge.on_command_write(value) {
++            RemoteBridgeWriteOutcome::Enqueued => {
++                info!("rustmix-wave=rustmix-remote-command status=enqueued peer={addr} bytes={value:02X?}");
++            }
++            RemoteBridgeWriteOutcome::DuplicateOrUnsupported => {
++                info!("rustmix-wave=rustmix-remote-command status=ignored reason=duplicate-or-unsupported peer={addr} bytes={value:02X?}");
++            }
++            RemoteBridgeWriteOutcome::InvalidPacket(error) => {
++                warn!("rustmix-wave=rustmix-remote-command status=invalid peer={addr} error={error:?} bytes={value:02X?}");
++            }
++        }
++        Ok(true)
++    }
++
++    #[allow(clippy::too_many_arguments)]
++    fn send_write_response(
++        &self,
++        gatt_if: GattInterface,
++        conn_id: ConnectionId,
++        trans_id: TransferId,
++        handle: Handle,
++        offset: u16,
++        need_rsp: bool,
++        is_prep: bool,
++        value: &[u8],
++    ) -> Result<(), EspError> {
++        if !need_rsp {
++            return Ok(());
++        }
++        if is_prep {
++            let mut state = self.state.lock().unwrap();
++            state
++                .response
++                .attr_handle(handle)
++                .auth_req(0)
++                .offset(offset)
++                .value(value)
++                .map_err(|_| EspError::from_infallible::<ESP_FAIL>())?;
++            self.gatts
++                .send_response(gatt_if, conn_id, trans_id, GattStatus::Ok, Some(&state.response))?;
++        } else {
++            self.gatts
++                .send_response(gatt_if, conn_id, trans_id, GattStatus::Ok, None)?;
++        }
++        Ok(())
++    }
++
++    fn check_esp_status(&self, status: Result<(), EspError>) {
++        if let Err(error) = status {
++            warn!("rustmix-wave=rustmix-remote-ble status=callback-error error={error:?}");
++        }
++    }
++
++    fn check_bt_status(&self, status: BtStatus) -> Result<(), EspError> {
++        if matches!(status, BtStatus::Success) {
++            Ok(())
++        } else {
++            warn!("rustmix-wave=rustmix-remote-ble status=bt-status-error status={status:?}");
++            Err(EspError::from_infallible::<ESP_FAIL>())
++        }
++    }
++
++    fn check_gatt_status(&self, status: GattStatus) -> Result<(), EspError> {
++        if matches!(status, GattStatus::Ok) {
++            Ok(())
++        } else {
++            warn!("rustmix-wave=rustmix-remote-ble status=gatt-status-error status={status:?}");
++            Err(EspError::from_infallible::<ESP_FAIL>())
++        }
++    }
++}
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/src/rustmix_remote/bridge.rs rustmix_wave_r3_work/src/rustmix_remote/bridge.rs
+--- rustmix_wave_inspect/rustmix-wave-upload/src/rustmix_remote/bridge.rs	1970-01-01 00:00:00.000000000 +0000
++++ rustmix_wave_r3_work/src/rustmix_remote/bridge.rs	2026-07-03 20:36:07.048583459 +0000
+@@ -0,0 +1,60 @@
++//! RRBP parser-to-queue bridge.
++
++use super::{RemoteEventQueue, RrbpError, RrbpParser};
++
++#[derive(Debug)]
++pub enum RemoteBridgeWriteOutcome {
++    Enqueued,
++    DuplicateOrUnsupported,
++    InvalidPacket(RrbpError),
++}
++
++pub struct RustmixRemoteBridge {
++    parser: RrbpParser,
++    queue: RemoteEventQueue,
++}
++
++impl RustmixRemoteBridge {
++    #[must_use]
++    pub fn new(queue: RemoteEventQueue) -> Self {
++        Self {
++            parser: RrbpParser::new(),
++            queue,
++        }
++    }
++
++    /// Called from the BLE Command characteristic write callback.
++    ///
++    /// This method only parses and enqueues; it never mutates reader/UI state.
++    pub fn on_command_write(&mut self, bytes: &[u8]) -> RemoteBridgeWriteOutcome {
++        match self.parser.parse(bytes) {
++            Ok(Some(event)) => {
++                self.queue.push(event);
++                RemoteBridgeWriteOutcome::Enqueued
++            }
++            Ok(None) => RemoteBridgeWriteOutcome::DuplicateOrUnsupported,
++            Err(error) => RemoteBridgeWriteOutcome::InvalidPacket(error),
++        }
++    }
++
++    pub fn reset_sequence_tracking(&mut self) {
++        self.parser.reset_sequence_tracking();
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::rustmix_remote::RemoteEvent;
++
++    #[test]
++    fn bridge_enqueues_page_turn() {
++        let queue = RemoteEventQueue::default();
++        let mut bridge = RustmixRemoteBridge::new(queue.clone());
++        assert!(matches!(
++            bridge.on_command_write(&[0x01, 0x05, 0x01, 0, 0, 0]),
++            RemoteBridgeWriteOutcome::Enqueued
++        ));
++        assert_eq!(queue.pop(), Some(RemoteEvent::PageNext));
++    }
++}
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/src/rustmix_remote/mod.rs rustmix_wave_r3_work/src/rustmix_remote/mod.rs
+--- rustmix_wave_inspect/rustmix-wave-upload/src/rustmix_remote/mod.rs	1970-01-01 00:00:00.000000000 +0000
++++ rustmix_wave_r3_work/src/rustmix_remote/mod.rs	2026-07-03 20:36:07.055861052 +0000
+@@ -0,0 +1,15 @@
++//! Rustmix Remote support.
++//!
++//! The host-testable RRBP parser and queue are always compiled. The ESP-IDF BLE
++//! GATT server is compiled only with `--features rustmix-remote-ble`.
++
++pub mod bridge;
++pub mod queue;
++pub mod rrbp;
++
++#[cfg(all(target_os = "espidf", feature = "rustmix-remote-ble"))]
++pub mod ble_gatt;
++
++pub use bridge::{RemoteBridgeWriteOutcome, RustmixRemoteBridge};
++pub use queue::{RemoteEventQueue, REMOTE_EVENT_QUEUE_CAPACITY};
++pub use rrbp::{RemoteEvent, RrbpError, RrbpParser, RRBP_PACKET_LEN, RRBP_PROTOCOL_VERSION};
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/src/rustmix_remote/queue.rs rustmix_wave_r3_work/src/rustmix_remote/queue.rs
+--- rustmix_wave_inspect/rustmix-wave-upload/src/rustmix_remote/queue.rs	1970-01-01 00:00:00.000000000 +0000
++++ rustmix_wave_r3_work/src/rustmix_remote/queue.rs	2026-07-03 20:36:07.039927247 +0000
+@@ -0,0 +1,91 @@
++//! Small thread-safe queue used as the BLE callback boundary.
++//!
++//! The BLE GATT write callback pushes `RemoteEvent`s here. The firmware main
++//! loop drains the queue and applies the event through the normal UI path.
++
++use std::{
++    collections::VecDeque,
++    sync::{Arc, Mutex},
++};
++
++use super::RemoteEvent;
++
++pub const REMOTE_EVENT_QUEUE_CAPACITY: usize = 8;
++
++#[derive(Clone, Debug)]
++pub struct RemoteEventQueue {
++    inner: Arc<Mutex<VecDeque<RemoteEvent>>>,
++    capacity: usize,
++}
++
++impl Default for RemoteEventQueue {
++    fn default() -> Self {
++        Self::new(REMOTE_EVENT_QUEUE_CAPACITY)
++    }
++}
++
++impl RemoteEventQueue {
++    #[must_use]
++    pub fn new(capacity: usize) -> Self {
++        Self {
++            inner: Arc::new(Mutex::new(VecDeque::with_capacity(capacity.max(1)))),
++            capacity: capacity.max(1),
++        }
++    }
++
++    /// Push an event from a producer such as the BLE GATT callback.
++    ///
++    /// If the queue is full, the oldest event is dropped. For page turning,
++    /// keeping the newest command is safer than allowing an old burst to replay.
++    pub fn push(&self, event: RemoteEvent) {
++        let mut inner = self.inner.lock().unwrap();
++        if inner.len() >= self.capacity {
++            inner.pop_front();
++        }
++        inner.push_back(event);
++    }
++
++    pub fn pop(&self) -> Option<RemoteEvent> {
++        self.inner.lock().unwrap().pop_front()
++    }
++
++    #[must_use]
++    pub fn len(&self) -> usize {
++        self.inner.lock().unwrap().len()
++    }
++
++    #[must_use]
++    pub fn is_empty(&self) -> bool {
++        self.len() == 0
++    }
++
++    pub fn clear(&self) {
++        self.inner.lock().unwrap().clear();
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn queue_returns_events_in_order() {
++        let queue = RemoteEventQueue::new(4);
++        queue.push(RemoteEvent::PageNext);
++        queue.push(RemoteEvent::PagePrevious);
++        assert_eq!(queue.pop(), Some(RemoteEvent::PageNext));
++        assert_eq!(queue.pop(), Some(RemoteEvent::PagePrevious));
++        assert_eq!(queue.pop(), None);
++    }
++
++    #[test]
++    fn queue_drops_oldest_when_full() {
++        let queue = RemoteEventQueue::new(2);
++        queue.push(RemoteEvent::PageNext);
++        queue.push(RemoteEvent::PagePrevious);
++        queue.push(RemoteEvent::Menu);
++        assert_eq!(queue.pop(), Some(RemoteEvent::PagePrevious));
++        assert_eq!(queue.pop(), Some(RemoteEvent::Menu));
++        assert_eq!(queue.pop(), None);
++    }
++}
+diff -ruN rustmix_wave_inspect/rustmix-wave-upload/src/rustmix_remote/rrbp.rs rustmix_wave_r3_work/src/rustmix_remote/rrbp.rs
+--- rustmix_wave_inspect/rustmix-wave-upload/src/rustmix_remote/rrbp.rs	1970-01-01 00:00:00.000000000 +0000
++++ rustmix_wave_r3_work/src/rustmix_remote/rrbp.rs	2026-07-03 20:36:07.032337963 +0000
+@@ -0,0 +1,219 @@
++//! Rustmix Remote BLE Protocol v1 parser.
++//!
++//! RRBP packets are intentionally tiny so a BLE write callback can parse them
++//! quickly and enqueue a `RemoteEvent` without touching reader/UI state.
++
++pub const RRBP_PROTOCOL_VERSION: u8 = 0x01;
++pub const RRBP_PACKET_LEN: usize = 6;
++
++pub const FLAG_LONG_PRESS: u8 = 0x01;
++pub const FLAG_REPEAT: u8 = 0x02;
++pub const FLAG_ROTARY: u8 = 0x04;
++pub const FLAG_HIGH_PRIORITY: u8 = 0x08;
++pub const FLAG_REQUIRE_ACK: u8 = 0x10;
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum RemoteEvent {
++    PageNext,
++    PagePrevious,
++    Select,
++    Back,
++    Menu,
++    Sleep,
++    Wake,
++    ScrollUp,
++    ScrollDown,
++    NextChapterOrFile,
++    PreviousChapterOrFile,
++    ToggleBookmark,
++    Refresh,
++}
++
++impl RemoteEvent {
++    #[must_use]
++    pub const fn marker(self) -> &'static str {
++        match self {
++            Self::PageNext => "page-next",
++            Self::PagePrevious => "page-previous",
++            Self::Select => "select",
++            Self::Back => "back",
++            Self::Menu => "menu",
++            Self::Sleep => "sleep",
++            Self::Wake => "wake",
++            Self::ScrollUp => "scroll-up",
++            Self::ScrollDown => "scroll-down",
++            Self::NextChapterOrFile => "next-chapter-or-file",
++            Self::PreviousChapterOrFile => "previous-chapter-or-file",
++            Self::ToggleBookmark => "toggle-bookmark",
++            Self::Refresh => "refresh",
++        }
++    }
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum RrbpError {
++    PacketTooShort { got: usize },
++    PacketTooLong { got: usize },
++    UnsupportedVersion { got: u8 },
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct RrbpPacket {
++    pub version: u8,
++    pub sequence: u8,
++    pub command: u8,
++    pub flags: u8,
++    pub parameter: u8,
++    pub reserved: u8,
++}
++
++impl RrbpPacket {
++    pub fn decode(bytes: &[u8]) -> Result<Self, RrbpError> {
++        if bytes.len() < RRBP_PACKET_LEN {
++            return Err(RrbpError::PacketTooShort { got: bytes.len() });
++        }
++        if bytes.len() > RRBP_PACKET_LEN {
++            return Err(RrbpError::PacketTooLong { got: bytes.len() });
++        }
++        if bytes[0] != RRBP_PROTOCOL_VERSION {
++            return Err(RrbpError::UnsupportedVersion { got: bytes[0] });
++        }
++        Ok(Self {
++            version: bytes[0],
++            sequence: bytes[1],
++            command: bytes[2],
++            flags: bytes[3],
++            parameter: bytes[4],
++            reserved: bytes[5],
++        })
++    }
++
++    #[must_use]
++    pub const fn event(self) -> Option<RemoteEvent> {
++        match self.command {
++            0x01 => Some(RemoteEvent::PageNext),
++            0x02 => Some(RemoteEvent::PagePrevious),
++            0x03 => Some(RemoteEvent::Select),
++            0x04 => Some(RemoteEvent::Back),
++            0x05 => Some(RemoteEvent::Menu),
++            0x06 => Some(RemoteEvent::Sleep),
++            0x07 => Some(RemoteEvent::Wake),
++            0x08 => Some(RemoteEvent::ScrollUp),
++            0x09 => Some(RemoteEvent::ScrollDown),
++            0x0A => Some(RemoteEvent::NextChapterOrFile),
++            0x0B => Some(RemoteEvent::PreviousChapterOrFile),
++            0x0C => Some(RemoteEvent::ToggleBookmark),
++            0x0D => Some(RemoteEvent::Refresh),
++            _ => None,
++        }
++    }
++}
++
++#[derive(Debug, Default)]
++pub struct RrbpParser {
++    last_sequence: Option<u8>,
++}
++
++impl RrbpParser {
++    #[must_use]
++    pub const fn new() -> Self {
++        Self { last_sequence: None }
++    }
++
++    /// Parse a 6-byte RRBP v1 packet.
++    ///
++    /// Returns:
++    /// - `Ok(Some(event))` for a new supported command.
++    /// - `Ok(None)` for duplicate sequence numbers or unsupported commands.
++    /// - `Err(_)` for malformed packets.
++    pub fn parse(&mut self, bytes: &[u8]) -> Result<Option<RemoteEvent>, RrbpError> {
++        let packet = RrbpPacket::decode(bytes)?;
++        if self.last_sequence == Some(packet.sequence) {
++            return Ok(None);
++        }
++        self.last_sequence = Some(packet.sequence);
++        Ok(packet.event())
++    }
++
++    pub fn reset_sequence_tracking(&mut self) {
++        self.last_sequence = None;
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn parses_page_next() {
++        let mut parser = RrbpParser::new();
++        let event = parser
++            .parse(&[0x01, 0x00, 0x01, 0x00, 0x00, 0x00])
++            .unwrap();
++        assert_eq!(event, Some(RemoteEvent::PageNext));
++    }
++
++    #[test]
++    fn parses_page_previous() {
++        let mut parser = RrbpParser::new();
++        let event = parser
++            .parse(&[0x01, 0x01, 0x02, 0x00, 0x00, 0x00])
++            .unwrap();
++        assert_eq!(event, Some(RemoteEvent::PagePrevious));
++    }
++
++    #[test]
++    fn drops_duplicate_sequence() {
++        let mut parser = RrbpParser::new();
++        assert_eq!(
++            parser
++                .parse(&[0x01, 0x07, 0x01, 0x00, 0x00, 0x00])
++                .unwrap(),
++            Some(RemoteEvent::PageNext)
++        );
++        assert_eq!(
++            parser
++                .parse(&[0x01, 0x07, 0x02, 0x00, 0x00, 0x00])
++                .unwrap(),
++            None
++        );
++    }
++
++    #[test]
++    fn ignores_unknown_command() {
++        let mut parser = RrbpParser::new();
++        assert_eq!(
++            parser
++                .parse(&[0x01, 0x02, 0xFF, 0x00, 0x00, 0x00])
++                .unwrap(),
++            None
++        );
++    }
++
++    #[test]
++    fn rejects_bad_version() {
++        let mut parser = RrbpParser::new();
++        assert_eq!(
++            parser.parse(&[0x02, 0x00, 0x01, 0x00, 0x00, 0x00]),
++            Err(RrbpError::UnsupportedVersion { got: 0x02 })
++        );
++    }
++
++    #[test]
++    fn rejects_short_packet() {
++        let mut parser = RrbpParser::new();
++        assert_eq!(
++            parser.parse(&[0x01, 0x00, 0x01]),
++            Err(RrbpError::PacketTooShort { got: 3 })
++        );
++    }
++
++    #[test]
++    fn rejects_long_packet() {
++        let mut parser = RrbpParser::new();
++        assert_eq!(
++            parser.parse(&[0x01, 0x00, 0x01, 0, 0, 0, 0]),
++            Err(RrbpError::PacketTooLong { got: 7 })
++        );
++    }
++}

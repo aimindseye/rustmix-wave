@@ -35,6 +35,7 @@ pub mod rtc;
 pub mod rtc_alarm_interrupt;
 pub mod runtime_memory;
 pub mod runtime_worker;
+pub mod rustmix_remote;
 pub mod shared_i2c;
 pub mod sleep_images;
 pub mod sleep_mode;

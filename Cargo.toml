@@ -16,6 +16,12 @@ harness = false
 debug = true
 opt-level = "z"
 
+[features]
+default = []
+# Enables the ESP-IDF Bluedroid BLE GATT service for Rustmix Remote.
+# r1 intentionally gives BLE ownership of the modem and disables Wi-Fi startup.
+rustmix-remote-ble = ["enumset"]
+
 [profile.release]
 codegen-units = 1
 lto = true
@@ -27,6 +33,7 @@ anyhow = "1"
 embedded-graphics = "0.8.1"
 embedded-hal = "1.0"
 log = "0.4"
+enumset = { version = "1", optional = true }
 miniz_oxide = "0.8"
 
 [target.'cfg(target_os = "espidf")'.dependencies]
@@ -36,3 +43,7 @@ es8311 = "0.1.0"
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"] }
+
+[package.metadata.esp-idf-sys]
+esp_idf_version = "v5.5.1"
+esp_idf_tools_install_dir = "global"
