@@ -238,3 +238,93 @@ All new keyboard or grid-style text-entry screens should compose the shared `Key
 ## License
 
 MIT. Embedded Reader font notices remain under [`docs/licenses/`](docs/licenses/).
+
+<!-- RUSTMIX_WAVE_DUAL_RELEASE_V1_2_START -->
+
+## Rustmix Wave release variants
+
+Rustmix Wave now publishes two separate firmware release variants for the Waveshare ESP32-S3 3.97-inch e-paper device:
+
+| Release | Tag | Best for | Wi-Fi | BLE Remote |
+|---|---|---|---|---|
+| Wi-Fi build | `v1.2.0-wifi` | Normal daily use, Wi-Fi transfer, weather, NTP/time sync, network features | Enabled | Disabled |
+| BLE Remote build | `v1.2.0-ble` | Samsung Wear OS Rustmix Remote page turning for TXT and EPUB readers | Disabled intentionally | Enabled |
+
+### Why two releases?
+
+The Waveshare 3.97-inch e-paper board uses an ESP32-S3. ESP32-S3 provides both Wi-Fi and Bluetooth LE, but they share the same 2.4 GHz RF subsystem. ESP-IDF supports coexistence, but this firmware has several heavy users of memory, radio, storage, and display refresh:
+
+- Wi-Fi transfer web portal
+- weather fetch
+- NTP/time sync
+- SD card access
+- audio/voice notes
+- TXT/EPUB reader cache workers
+- e-paper refresh coordination
+- BLE GATT command service for Rustmix Remote
+
+For the accepted Rustmix Remote validation, the BLE feature build gives BLE ownership of the modem and intentionally skips Wi-Fi/network services. This keeps page turning reliable and keeps the BLE callback safe: BLE parses and enqueues commands only, while the main loop owns reader state mutation.
+
+### Waveshare 3.97-inch e-paper limitations
+
+The Waveshare ESP32-S3 3.97-inch e-paper device is powerful for an embedded reader, but the firmware must respect these practical limits:
+
+- E-paper refresh is slow compared with LCD/OLED displays.
+- Full refreshes are expensive; partial refreshes must be coordinated.
+- Internal RAM is limited; PSRAM helps but does not remove all task-stack and allocation constraints.
+- Wi-Fi and BLE share the ESP32-S3 radio subsystem.
+- SD card, reader cache, network tasks, and display refresh can compete for time and memory.
+- BLE callbacks must not mutate UI or reader state directly.
+
+### Wi-Fi release
+
+Use the Wi-Fi release for normal Rustmix-Wave behavior:
+
+- TXT reader
+- EPUB reader
+- Indic EPUB support
+- voice notes
+- calendar
+- dictionary
+- games
+- Wi-Fi transfer
+- weather
+- time/NTP/network features
+
+Flash the Wi-Fi release ELF with:
+
+```
+espflash flash --chip esp32s3 --monitor rustmix-wave-v1.2.0-wifi.elf
+```
+
+### BLE Remote release
+
+Use the BLE release when using the Samsung Wear OS Rustmix Remote app as a page-turning remote.
+
+Accepted BLE Remote behavior:
+
+- Rustmix Remote connects through BLE GATT.
+- Saved/direct BLE MAC fallback works.
+- TXT reader Previous/Next page turning works.
+- EPUB reader Previous/Next page turning works.
+- Wi-Fi is intentionally skipped in this build.
+
+Flash the BLE release ELF with:
+
+```
+espflash flash --chip esp32s3 --monitor rustmix-wave-v1.2.0-ble.elf
+```
+
+Expected BLE logs:
+
+```
+rustmix-wave=rustmix-remote-gap event=AdvertisingStarted(Success)
+rustmix-wave=rustmix-remote-gatts event=PeerConnected
+rustmix-wave=rustmix-remote-gatts event=Write
+rustmix-wave=rustmix-remote-command status=enqueued
+rustmix-wave=rustmix-remote-event event=page-next route=reader-page
+rustmix-wave=rustmix-remote-event event=page-previous route=reader-page
+```
+
+<!-- RUSTMIX_WAVE_DUAL_RELEASE_V1_2_END -->
+

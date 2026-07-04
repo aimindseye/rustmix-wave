@@ -1632,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "waveshare-epd397-rust-app"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "embedded-graphics",
