@@ -114,8 +114,34 @@ Expected BLE logs:
 Rustmix Remote v1.0.0 is the validated Wear OS companion app:
 
     https://github.com/aimindseye/rustmix-watch-remote/releases/tag/v1.0.0
-
 <!-- RUSTMIX_WAVE_BLE_RELEASE_NOTICE_END -->
+
+<!-- RUSTMIX_WAVE_BLE_DEMO_VIDEO_START -->
+
+## Rustmix Remote BLE demo
+
+The demo below shows the Rustmix Remote Wear OS app controlling Rustmix-Wave page turns on the Waveshare ESP32-S3 3.97-inch e-paper device over BLE GATT.
+
+[![Rustmix Wave BLE Remote demo](docs/images/rustmix-wave-ble-remote-demo.jpg)](docs/videos/rustmix-wave-ble-remote-demo.mp4)
+
+Demo coverage:
+
+- Samsung Wear OS watch running Rustmix Remote
+- Rustmix-Wave BLE firmware on Waveshare 3.97-inch e-paper
+- Saved/direct BLE MAC connection
+- Previous / Next page controls
+- TXT reader page turning
+- EPUB reader page turning
+
+For this demo, use the BLE firmware release:
+
+    v1.2.0-ble
+
+Use the Wi-Fi firmware release for normal Wi-Fi transfer, weather, NTP/time sync, and network features:
+
+    v1.2.0-wifi
+
+<!-- RUSTMIX_WAVE_BLE_DEMO_VIDEO_END -->
 
 ## Highlights
 
