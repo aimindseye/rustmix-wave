@@ -40,17 +40,32 @@ where
     }
 
     /// Return one debounced press. Keys are active low on the Waveshare board.
-    pub fn poll<D: DelayNs>(&mut self, delay: &mut D) -> Result<Option<ButtonEvent>> {
-        if self.is_pressed(ButtonEvent::Up)? {
-            return self.confirm(delay, ButtonEvent::Up);
+    /// Return one BOOT release with swapped behavior:
+    /// - Physical short press -> returns `LongPress` (triggers global Back)
+    /// - Physical long hold (>= 900ms) -> returns `ShortPress` (triggers contextual/axis toggle)
+    pub fn poll<D: DelayNs>(&mut self, delay: &mut D) -> Result<Option<BootButtonEvent>> {
+        if !self.is_pressed()? {
+            return Ok(None);
         }
-        if self.is_pressed(ButtonEvent::Select)? {
-            return self.confirm(delay, ButtonEvent::Select);
+        delay.delay_ms(DEBOUNCE_MS);
+        if !self.is_pressed()? {
+            return Ok(None);
         }
-        if self.is_pressed(ButtonEvent::Down)? {
-            return self.confirm(delay, ButtonEvent::Down);
+
+        let mut held_ms = DEBOUNCE_MS;
+        while self.is_pressed()? {
+            if held_ms >= BOOT_BACK_LONG_PRESS_MS {
+                while self.is_pressed()? {
+                    delay.delay_ms(10);
+                }
+                // Holding BOOT now triggers the contextual/axis toggle
+                return Ok(Some(BootButtonEvent::ShortPress));
+            }
+            delay.delay_ms(10);
+            held_ms = held_ms.saturating_add(10);
         }
-        Ok(None)
+        // A quick click of BOOT now triggers Back!
+        Ok(Some(BootButtonEvent::LongPress))
     }
 
     fn confirm<D: DelayNs>(
