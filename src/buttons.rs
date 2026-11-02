@@ -40,32 +40,15 @@ where
     }
 
     /// Return one debounced press. Keys are active low on the Waveshare board.
-    /// Return one BOOT release with swapped behavior:
-    /// - Physical short press -> returns `LongPress` (triggers global Back)
-    /// - Physical long hold (>= 900ms) -> returns `ShortPress` (triggers contextual/axis toggle)
-    pub fn poll<D: DelayNs>(&mut self, delay: &mut D) -> Result<Option<BootButtonEvent>> {
-        if !self.is_pressed()? {
-            return Ok(None);
-        }
-        delay.delay_ms(DEBOUNCE_MS);
-        if !self.is_pressed()? {
-            return Ok(None);
-        }
-
-        let mut held_ms = DEBOUNCE_MS;
-        while self.is_pressed()? {
-            if held_ms >= BOOT_BACK_LONG_PRESS_MS {
-                while self.is_pressed()? {
-                    delay.delay_ms(10);
+    pub fn poll<D: DelayNs>(&mut self, delay: &mut D) -> Result<Option<ButtonEvent>> {
+        for event in [ButtonEvent::Up, ButtonEvent::Select, ButtonEvent::Down] {
+            if self.is_pressed(event)? {
+                if let Some(pressed) = self.confirm(delay, event)? {
+                    return Ok(Some(pressed));
                 }
-                // Holding BOOT now triggers the contextual/axis toggle
-                return Ok(Some(BootButtonEvent::ShortPress));
             }
-            delay.delay_ms(10);
-            held_ms = held_ms.saturating_add(10);
         }
-        // A quick click of BOOT now triggers Back!
-        Ok(Some(BootButtonEvent::LongPress))
+        Ok(None)
     }
 
     fn confirm<D: DelayNs>(
@@ -128,7 +111,9 @@ where
         Self { back }
     }
 
-    /// Return one BOOT release classified as short or long.
+    /// Return one BOOT release with swapped behavior:
+    /// - Physical short press -> returns `LongPress` (triggers global Back)
+    /// - Physical long hold (>= 900ms) -> returns `ShortPress` (triggers contextual/axis toggle)
     pub fn poll<D: DelayNs>(&mut self, delay: &mut D) -> Result<Option<BootButtonEvent>> {
         if !self.is_pressed()? {
             return Ok(None);
@@ -144,12 +129,14 @@ where
                 while self.is_pressed()? {
                     delay.delay_ms(10);
                 }
-                return Ok(Some(BootButtonEvent::LongPress));
+                // Holding BOOT now triggers the contextual/axis toggle
+                return Ok(Some(BootButtonEvent::ShortPress));
             }
             delay.delay_ms(10);
             held_ms = held_ms.saturating_add(10);
         }
-        Ok(Some(BootButtonEvent::ShortPress))
+        // A quick click of BOOT now triggers Back!
+        Ok(Some(BootButtonEvent::LongPress))
     }
 
     fn is_pressed(&mut self) -> Result<bool> {
