@@ -1,0 +1,10 @@
+{
+  "id": "baba_is_you",
+  "title": "Baba Is You",
+  "category": "games",
+  "entry": "main.lua",
+  "version": "1.0.0",
+  "description": "1-bit rule-bending puzzle game with IMU tilt and rotary undo.",
+  "controls": ["tilt", "encoder", "buttons"],
+  "refresh_mode": "partial"
+}
