@@ -127,15 +127,17 @@ impl BabaGame {
     }
 
     fn char_to_kind(ch: u8) -> Option<EntityKind> {
-        use EntityKind::*;
-        use Noun::*;
-        use TokenRole::*;
+        use EntityKind::{Object, Text};
+        use Noun::{Baba, Flag, Rock, Wall, Water};
+        use TokenRole::{
+            Noun as RoleNoun, PropPush, PropSink, PropStop, PropWin, PropYou, VerbIs,
+        };
         match ch {
-            b'B' => Some(Text(Noun(Baba))),
-            b'W' => Some(Text(Noun(Wall))),
-            b'R' => Some(Text(Noun(Rock))),
-            b'F' => Some(Text(Noun(Flag))),
-            b'K' => Some(Text(Noun(Water))),
+            b'B' => Some(Text(RoleNoun(Baba))),
+            b'W' => Some(Text(RoleNoun(Wall))),
+            b'R' => Some(Text(RoleNoun(Rock))),
+            b'F' => Some(Text(RoleNoun(Flag))),
+            b'K' => Some(Text(RoleNoun(Water))),
             b'I' => Some(Text(VerbIs)),
             b'Y' => Some(Text(PropYou)),
             b'S' => Some(Text(PropStop)),
