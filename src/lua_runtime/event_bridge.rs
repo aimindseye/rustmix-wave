@@ -1,13 +1,14 @@
 //! Bounded SD Lua event bridge.
 //!
 //! Static bootstrap drawing remains available. Rust owns mutable Sudoku,
-//! Minesweeper, Tilt Maze, Motion 2048, Sokoban Tilt and Shake Dice state,
+//! Minesweeper, Tilt Maze, Motion 2048, Sokoban Tilt, Baba Tilt and Shake Dice state,
 //! redraw decisions and hardware-facing input. SD declarations never receive
 //! raw QMI8658 or panel access.
 
 use crate::{
     buttons::ButtonEvent,
     games::{
+        baba_tilt::{BabaTiltEventResult, BabaTiltGame},
         canvas::NativeGameCanvas,
         minesweeper::{MinesweeperEventResult, MinesweeperGame},
         motion_2048::{Motion2048EventResult, Motion2048Game},
@@ -26,6 +27,7 @@ pub enum LuaGameEventResult {
     TiltMaze(TiltMazeEventResult),
     Motion2048(Motion2048EventResult),
     SokobanTilt(SokobanTiltEventResult),
+    BabaTilt(BabaTiltEventResult),
     ShakeDice(ShakeDiceEventResult),
 }
 impl LuaGameEventResult {
@@ -37,6 +39,7 @@ impl LuaGameEventResult {
             Self::TiltMaze(_) => "tilt-maze",
             Self::Motion2048(_) => "motion-2048",
             Self::SokobanTilt(_) => "sokoban-tilt",
+            Self::BabaTilt(_) => "baba-tilt",
             Self::ShakeDice(_) => "shake-dice",
         }
     }
@@ -48,6 +51,7 @@ impl LuaGameEventResult {
             Self::TiltMaze(r) => r.reason,
             Self::Motion2048(r) => r.reason,
             Self::SokobanTilt(r) => r.reason,
+            Self::BabaTilt(r) => r.reason,
             Self::ShakeDice(r) => r.reason,
         }
     }
@@ -59,6 +63,7 @@ impl LuaGameEventResult {
             Self::TiltMaze(r) => r.row,
             Self::Motion2048(r) => r.row,
             Self::SokobanTilt(r) => r.row,
+            Self::BabaTilt(r) => r.row,
             Self::ShakeDice(_) => 0,
         }
     }
@@ -70,6 +75,7 @@ impl LuaGameEventResult {
             Self::TiltMaze(r) => r.column,
             Self::Motion2048(r) => r.column,
             Self::SokobanTilt(r) => r.column,
+            Self::BabaTilt(r) => r.column,
             Self::ShakeDice(_) => 0,
         }
     }
@@ -81,6 +87,7 @@ impl LuaGameEventResult {
             Self::TiltMaze(_)
             | Self::Motion2048(_)
             | Self::SokobanTilt(_)
+            | Self::BabaTilt(_)
             | Self::ShakeDice(_) => "motion",
         }
     }
@@ -92,6 +99,7 @@ impl LuaGameEventResult {
             Self::TiltMaze(_)
             | Self::Motion2048(_)
             | Self::SokobanTilt(_)
+            | Self::BabaTilt(_)
             | Self::ShakeDice(_) => "imu",
         }
     }
@@ -131,6 +139,14 @@ impl LuaGameEventResult {
                 r.crates_on_goal,
                 r.outcome.marker()
             ),
+            Self::BabaTilt(r) => format!(
+                "direction={} raw-axis={} moves={} rules={} outcome={}",
+                r.direction,
+                r.raw_axis,
+                r.moves,
+                r.rules_count,
+                r.outcome.marker()
+            ),
             Self::ShakeDice(r) => format!(
                 "die={} value={} rolls={}",
                 r.die.marker(),
@@ -147,6 +163,7 @@ impl LuaGameEventResult {
             Self::TiltMaze(r) => r.outcome.completed(),
             Self::Motion2048(r) => r.outcome.completed(),
             Self::SokobanTilt(r) => r.outcome.completed(),
+            Self::BabaTilt(r) => r.outcome.completed(),
             Self::ShakeDice(_) => false,
         }
     }
@@ -158,6 +175,7 @@ impl LuaGameEventResult {
             Self::TiltMaze(r) => r.dirty_regions.len(),
             Self::Motion2048(r) => r.dirty_regions.len(),
             Self::SokobanTilt(r) => r.dirty_regions.len(),
+            Self::BabaTilt(r) => r.dirty_regions.len(),
             Self::ShakeDice(r) => r.dirty_regions.len(),
         }
     }
@@ -171,6 +189,7 @@ pub enum LuaEventBridge {
     TiltMaze(TiltMazeGame),
     Motion2048(Motion2048Game),
     SokobanTilt(SokobanTiltGame),
+    BabaTilt(BabaTiltGame),
     ShakeDice(ShakeDiceGame),
 }
 impl LuaEventBridge {
@@ -183,6 +202,10 @@ impl LuaEventBridge {
             let game = SokobanTiltGame::from_map(&map)?;
             game.render_initial(canvas)?;
             Ok(Self::SokobanTilt(game))
+        } else if let Some(map) = parse_baba_init(source)? {
+            let game = BabaTiltGame::from_map(&map)?;
+            game.render_initial(canvas)?;
+            Ok(Self::BabaTilt(game))
         } else if let Some(seed) = parse_motion2048_init(source)? {
             let game = Motion2048Game::from_seed(seed)?;
             game.render_initial(canvas)?;
@@ -213,6 +236,7 @@ impl LuaEventBridge {
             Self::TiltMaze(_) => "tilt-maze",
             Self::Motion2048(_) => "motion-2048",
             Self::SokobanTilt(_) => "sokoban-tilt",
+            Self::BabaTilt(_) => "baba-tilt",
             Self::ShakeDice(_) => "shake-dice",
         }
     }
@@ -223,6 +247,7 @@ impl LuaEventBridge {
             Self::TiltMaze(_)
                 | Self::Motion2048(_)
                 | Self::SokobanTilt(_)
+                | Self::BabaTilt(_)
                 | Self::ShakeDice(_)
         )
     }
@@ -250,6 +275,9 @@ impl LuaEventBridge {
             Self::SokobanTilt(g) => g
                 .apply_button_and_render(event, canvas)
                 .map(|r| r.map(LuaGameEventResult::SokobanTilt)),
+            Self::BabaTilt(g) => g
+                .apply_button_and_render(event, canvas)
+                .map(|r| r.map(LuaGameEventResult::BabaTilt)),
             Self::ShakeDice(g) => g
                 .apply_button_and_render(event, canvas)
                 .map(|r| r.map(LuaGameEventResult::ShakeDice)),
@@ -264,6 +292,7 @@ impl LuaEventBridge {
             | Self::TiltMaze(_)
             | Self::Motion2048(_)
             | Self::SokobanTilt(_)
+            | Self::BabaTilt(_)
             | Self::ShakeDice(_) => Ok(None),
             Self::Sudoku(g) => g
                 .apply_boot_short_press_and_render(canvas)
@@ -290,6 +319,9 @@ impl LuaEventBridge {
             Self::SokobanTilt(g) => g
                 .apply_motion_and_render(event, canvas)
                 .map(|r| r.map(LuaGameEventResult::SokobanTilt)),
+            Self::BabaTilt(g) => g
+                .apply_motion_and_render(event, canvas)
+                .map(|r| r.map(LuaGameEventResult::BabaTilt)),
             Self::ShakeDice(g) => g
                 .apply_motion_and_render(event, canvas)
                 .map(|r| r.map(LuaGameEventResult::ShakeDice)),
@@ -299,6 +331,9 @@ impl LuaEventBridge {
 }
 fn parse_sokoban_init(source: &str) -> Result<Option<String>, String> {
     parse_single_quoted_init(source, "sokoban.init(", "sokoban")
+}
+fn parse_baba_init(source: &str) -> Result<Option<String>, String> {
+    parse_single_quoted_init(source, "baba.init(", "baba")
 }
 fn parse_tiltmaze_init(source: &str) -> Result<Option<String>, String> {
     parse_single_quoted_init(source, "tiltmaze.init(", "tiltmaze")
