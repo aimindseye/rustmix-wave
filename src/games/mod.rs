@@ -12,5 +12,6 @@ pub mod motion_2048;
 pub mod refresh_policy;
 pub mod shake_dice;
 pub mod sokoban_tilt;
+pub mod baba_tilt;
 pub mod sudoku;
 pub mod tilt_maze;
