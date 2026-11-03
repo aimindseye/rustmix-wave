@@ -8,7 +8,7 @@
 use crate::{
     buttons::ButtonEvent,
     games::{
-        baba_tilt::{BabaTiltEventResult, BabaTiltGame},
+        baba_tilt::{BabaEventResult, BabaGame},
         canvas::NativeGameCanvas,
         minesweeper::{MinesweeperEventResult, MinesweeperGame},
         motion_2048::{Motion2048EventResult, Motion2048Game},
