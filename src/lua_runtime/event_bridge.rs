@@ -27,7 +27,7 @@ pub enum LuaGameEventResult {
     TiltMaze(TiltMazeEventResult),
     Motion2048(Motion2048EventResult),
     SokobanTilt(SokobanTiltEventResult),
-    BabaTilt(BabaTiltEventResult),
+    BabaTilt(BabaEventResult),
     ShakeDice(ShakeDiceEventResult),
 }
 impl LuaGameEventResult {
@@ -189,7 +189,7 @@ pub enum LuaEventBridge {
     TiltMaze(TiltMazeGame),
     Motion2048(Motion2048Game),
     SokobanTilt(SokobanTiltGame),
-    BabaTilt(BabaTiltGame),
+    BabaTilt(BabaGame),
     ShakeDice(ShakeDiceGame),
 }
 impl LuaEventBridge {
@@ -203,7 +203,7 @@ impl LuaEventBridge {
             game.render_initial(canvas)?;
             Ok(Self::SokobanTilt(game))
         } else if let Some(map) = parse_baba_init(source)? {
-            let game = BabaTiltGame::from_map(&map)?;
+            let game = BabaGame::from_map(&map)?;
             game.render_initial(canvas)?;
             Ok(Self::BabaTilt(game))
         } else if let Some(seed) = parse_motion2048_init(source)? {
