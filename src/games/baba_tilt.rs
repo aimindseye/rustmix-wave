@@ -1,4 +1,4 @@
-// src/games/baba_tilt.rs
+// Repo Path: src/games/baba_tilt.rs
 
 pub const GRID_W: usize = 12;
 pub const GRID_H: usize = 8;
@@ -7,11 +7,11 @@ pub const MAX_UNDO: usize = 32;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Noun {
-    Baba,
-    Wall,
-    Rock,
-    Flag,
-    Water,
+    Baba = 0,
+    Wall = 1,
+    Rock = 2,
+    Flag = 3,
+    Water = 4,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -52,8 +52,6 @@ impl Entity {
 
 #[derive(Clone, Copy, Default)]
 pub struct RuleSet {
-    // [Baba, Wall, Rock, Flag, Water] bitflags:
-    // bit 0: YOU, bit 1: STOP, bit 2: PUSH, bit 3: WIN, bit 4: SINK
     pub props: [u8; 5],
     pub transform: [Option<Noun>; 5],
 }
@@ -64,11 +62,11 @@ impl RuleSet {
     }
 }
 
-const BIT_YOU: u8 = 0;
-const BIT_STOP: u8 = 1;
-const BIT_PUSH: u8 = 2;
-const BIT_WIN: u8 = 3;
-const BIT_SINK: u8 = 4;
+pub const BIT_YOU: u8 = 0;
+pub const BIT_STOP: u8 = 1;
+pub const BIT_PUSH: u8 = 2;
+pub const BIT_WIN: u8 = 3;
+pub const BIT_SINK: u8 = 4;
 
 pub struct BabaGame {
     pub entities: [Entity; MAX_ENTITIES],
@@ -133,7 +131,6 @@ impl BabaGame {
         use Noun::*;
         use TokenRole::*;
         match ch {
-            // Pushable Text Blocks (Uppercase)
             b'B' => Some(Text(Noun(Baba))),
             b'W' => Some(Text(Noun(Wall))),
             b'R' => Some(Text(Noun(Rock))),
@@ -145,7 +142,6 @@ impl BabaGame {
             b'P' => Some(Text(PropPush)),
             b'X' => Some(Text(PropWin)),
             b'N' => Some(Text(PropSink)),
-            // Physical Objects (Lowercase)
             b'b' => Some(Object(Baba)),
             b'w' => Some(Object(Wall)),
             b'r' => Some(Object(Rock)),
@@ -157,7 +153,6 @@ impl BabaGame {
 
     pub fn compile_rules(&mut self) {
         self.rules = RuleSet::default();
-
         for i in 0..MAX_ENTITIES {
             if !self.entities[i].active {
                 continue;
@@ -183,10 +178,10 @@ impl BabaGame {
                     }
                     if let EntityKind::Text(role) = self.entities[j].kind {
                         match role {
-                            TokenRole::PropYou  => self.rules.props[subj as usize] |= 1 << BIT_YOU,
+                            TokenRole::PropYou => self.rules.props[subj as usize] |= 1 << BIT_YOU,
                             TokenRole::PropStop => self.rules.props[subj as usize] |= 1 << BIT_STOP,
                             TokenRole::PropPush => self.rules.props[subj as usize] |= 1 << BIT_PUSH,
-                            TokenRole::PropWin  => self.rules.props[subj as usize] |= 1 << BIT_WIN,
+                            TokenRole::PropWin => self.rules.props[subj as usize] |= 1 << BIT_WIN,
                             TokenRole::PropSink => self.rules.props[subj as usize] |= 1 << BIT_SINK,
                             TokenRole::Noun(target) => self.rules.transform[subj as usize] = Some(target),
                             _ => {}
@@ -197,7 +192,7 @@ impl BabaGame {
         }
     }
 
-    fn entity_has_prop(&self, e: &Entity, bit: u8) -> bool {
+    pub fn entity_has_prop(&self, e: &Entity, bit: u8) -> bool {
         match e.kind {
             EntityKind::Text(_) => bit == BIT_PUSH,
             EntityKind::Object(noun) => self.rules.has_prop(noun, bit),
@@ -263,7 +258,6 @@ impl BabaGame {
             return false;
         }
 
-        // Save snapshot into Undo ring buffer
         self.undo_ring[self.undo_head] = snapshot;
         self.undo_head = (self.undo_head + 1) % MAX_UNDO;
         if self.undo_len < MAX_UNDO {
@@ -278,10 +272,8 @@ impl BabaGame {
         }
         self.steps += 1;
 
-        // 1. Recompile rules after movement
         self.compile_rules();
 
-        // 2. Apply NOUN IS NOUN transformations
         for e in self.entities.iter_mut() {
             if e.active {
                 if let EntityKind::Object(noun) = e.kind {
@@ -292,7 +284,6 @@ impl BabaGame {
             }
         }
 
-        // 3. Resolve SINK collisions
         for y in 0..GRID_H as i8 {
             for x in 0..GRID_W as i8 {
                 let mut count = 0;
@@ -351,7 +342,7 @@ impl BabaGame {
     }
 }
 
-pub const DEFAULT_LEVELS: [&[&str; GRID_H]; 3] = [
+pub const DEFAULT_LEVELS: [&[&str; GRID_H]; 5] = [
     &[
         "BIY.....FI..",
         "..........X.",
@@ -381,5 +372,25 @@ pub const DEFAULT_LEVELS: [&[&str; GRID_H]; 3] = [
         "............",
         "..r..R...f..",
         "....FIX.....",
+    ],
+    &[
+        "BIY.....KIN.",
+        "wwwwwwwwwwww",
+        "w....k.....w",
+        "w.b..k.r.f.w",
+        "w....k.....w",
+        "wwwwwwwwwwww",
+        "RIP.....FIX.",
+        "........WIS.",
+    ],
+    &[
+        "BIY.....WIS.",
+        "wwwwwwwwwwww",
+        "w..........w",
+        "w.b..r..R..w",
+        "w....I.....w",
+        "w....F.....w",
+        "wwwwwwwwwwww",
+        "RIP.....FIX.",
     ],
 ];
