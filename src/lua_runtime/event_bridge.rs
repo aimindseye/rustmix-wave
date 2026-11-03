@@ -277,7 +277,7 @@ impl LuaEventBridge {
                 .map(|r| r.map(LuaGameEventResult::SokobanTilt)),
             Self::BabaTilt(g) => g
                 .apply_button_and_render(event, canvas)
-                .map(|r| r.map(LuaGameEventResult::BabaTilt)),
+                .map(|r: Option<BabaEventResult>| r.map(LuaGameEventResult::BabaTilt)),
             Self::ShakeDice(g) => g
                 .apply_button_and_render(event, canvas)
                 .map(|r| r.map(LuaGameEventResult::ShakeDice)),
@@ -321,7 +321,7 @@ impl LuaEventBridge {
                 .map(|r| r.map(LuaGameEventResult::SokobanTilt)),
             Self::BabaTilt(g) => g
                 .apply_motion_and_render(event, canvas)
-                .map(|r| r.map(LuaGameEventResult::BabaTilt)),
+                .map(|r: Option<BabaEventResult>| r.map(LuaGameEventResult::BabaTilt)),
             Self::ShakeDice(g) => g
                 .apply_motion_and_render(event, canvas)
                 .map(|r| r.map(LuaGameEventResult::ShakeDice)),
