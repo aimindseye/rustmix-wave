@@ -1,11 +1,120 @@
 // Repo Path: src/games/baba_tilt.rs
 
+use super::{
+    canvas::{CanvasTextStyle, NativeGameCanvas},
+    dirty_regions::DirtyRect,
+};
+use crate::{
+    buttons::ButtonEvent,
+    imu_events::{ImuDetectedEvent, ImuDetectedEventKind, MotionAxis},
+};
+
 pub const GRID_W: usize = 12;
 pub const GRID_H: usize = 8;
 pub const MAX_ENTITIES: usize = 64;
 pub const MAX_UNDO: usize = 32;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+pub const BABA_GRID_X: i32 = 24;
+pub const BABA_GRID_Y: i32 = 200;
+pub const BABA_CELL_SIZE: i32 = 36;
+
+const BABA_HEADER_RECT: DirtyRect = DirtyRect::new(16, 48, 448, 96);
+const BABA_STATUS_RECT: DirtyRect = DirtyRect::new(16, 606, 448, 142);
+const BABA_BOARD_RECT: DirtyRect = DirtyRect::new(
+    BABA_GRID_X,
+    BABA_GRID_Y,
+    GRID_W as i32 * BABA_CELL_SIZE + 1,
+    GRID_H as i32 * BABA_CELL_SIZE + 1,
+);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BabaDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl BabaDirection {
+    #[must_use]
+    pub const fn from_raw_axis(axis: MotionAxis) -> Option<Self> {
+        match axis {
+            MotionAxis::PositiveX => Some(Self::Down),
+            MotionAxis::NegativeX => Some(Self::Up),
+            MotionAxis::PositiveY => Some(Self::Left),
+            MotionAxis::NegativeY => Some(Self::Right),
+            MotionAxis::PositiveZ | MotionAxis::NegativeZ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn marker(self) -> &'static str {
+        match self {
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Up => "UP",
+            Self::Down => "DOWN",
+            Self::Left => "LEFT",
+            Self::Right => "RIGHT",
+        }
+    }
+
+    #[must_use]
+    pub const fn delta(self) -> (i8, i8) {
+        match self {
+            Self::Up => (0, -1),
+            Self::Down => (0, 1),
+            Self::Left => (-1, 0),
+            Self::Right => (1, 0),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BabaOutcome {
+    InProgress,
+    Won,
+    Lost,
+}
+
+impl BabaOutcome {
+    #[must_use]
+    pub const fn marker(self) -> &'static str {
+        match self {
+            Self::InProgress => "in-progress",
+            Self::Won => "won",
+            Self::Lost => "lost",
+        }
+    }
+
+    #[must_use]
+    pub const fn completed(self) -> bool {
+        matches!(self, Self::Won)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BabaEventResult {
+    pub reason: &'static str,
+    pub row: usize,
+    pub column: usize,
+    pub moves: u32,
+    pub rules_count: usize,
+    pub outcome: BabaOutcome,
+    pub direction: &'static str,
+    pub raw_axis: &'static str,
+    pub dirty_regions: Vec<DirtyRect>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Noun {
     Baba = 0,
     Wall = 1,
@@ -14,7 +123,7 @@ pub enum Noun {
     Water = 4,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TokenRole {
     Noun(Noun),
     VerbIs,
@@ -25,13 +134,13 @@ pub enum TokenRole {
     PropSink,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntityKind {
     Object(Noun),
     Text(TokenRole),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entity {
     pub active: bool,
     pub kind: EntityKind,
@@ -50,7 +159,7 @@ impl Entity {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RuleSet {
     pub props: [u8; 5],
     pub transform: [Option<Noun>; 5],
@@ -68,6 +177,7 @@ pub const BIT_PUSH: u8 = 2;
 pub const BIT_WIN: u8 = 3;
 pub const BIT_SINK: u8 = 4;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BabaGame {
     pub entities: [Entity; MAX_ENTITIES],
     pub undo_ring: [[Entity; MAX_ENTITIES]; MAX_UNDO],
@@ -78,9 +188,18 @@ pub struct BabaGame {
     pub won: bool,
     pub lost: bool,
     pub level_idx: usize,
+    pub custom_levels: Vec<[String; GRID_H]>,
+    pub status: String,
+}
+
+impl Default for BabaGame {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BabaGame {
+    #[must_use]
     pub fn new() -> Self {
         let mut game = Self {
             entities: [Entity::empty(); MAX_ENTITIES],
@@ -92,9 +211,56 @@ impl BabaGame {
             won: false,
             lost: false,
             level_idx: 0,
+            custom_levels: Vec::new(),
+            status: "Tilt to move  UP undo  SELECT reset".into(),
         };
         game.load_ascii_level(DEFAULT_LEVELS[0]);
         game
+    }
+
+    pub fn from_map(encoded: &str) -> Result<Self, String> {
+        let mut game = Self::new();
+        let trimmed = encoded.trim();
+        if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("default") {
+            let mut parsed_levels = Vec::new();
+            for part in trimmed.split('|') {
+                let part = part.trim();
+                if part.is_empty() {
+                    continue;
+                }
+                let rows: Vec<&str> = part.split('/').collect();
+                if rows.len() == GRID_H && rows.iter().all(|r| r.len() >= GRID_W) {
+                    let level_arr: [String; GRID_H] = std::array::from_fn(|i| rows[i].to_string());
+                    parsed_levels.push(level_arr);
+                }
+            }
+            if !parsed_levels.is_empty() {
+                game.custom_levels = parsed_levels;
+                game.load_level_by_index(0);
+            }
+        }
+        Ok(game)
+    }
+
+    #[must_use]
+    pub fn total_levels(&self) -> usize {
+        if self.custom_levels.is_empty() {
+            DEFAULT_LEVELS.len()
+        } else {
+            self.custom_levels.len()
+        }
+    }
+
+    pub fn load_level_by_index(&mut self, index: usize) {
+        let total = self.total_levels();
+        self.level_idx = index % total;
+        if self.custom_levels.is_empty() {
+            self.load_ascii_level(DEFAULT_LEVELS[self.level_idx]);
+        } else {
+            let refs: [&str; GRID_H] =
+                std::array::from_fn(|i| self.custom_levels[self.level_idx][i].as_str());
+            self.load_ascii_level(&refs);
+        }
     }
 
     pub fn load_ascii_level(&mut self, rows: &[&str; GRID_H]) {
@@ -153,6 +319,32 @@ impl BabaGame {
         }
     }
 
+    fn kind_glyph(kind: EntityKind) -> (&'static str, bool) {
+        use EntityKind::{Object, Text};
+        use Noun::{Baba, Flag, Rock, Wall, Water};
+        use TokenRole::{
+            Noun as RoleNoun, PropPush, PropSink, PropStop, PropWin, PropYou, VerbIs,
+        };
+        match kind {
+            Text(RoleNoun(Baba)) => ("B", true),
+            Text(RoleNoun(Wall)) => ("W", true),
+            Text(RoleNoun(Rock)) => ("R", true),
+            Text(RoleNoun(Flag)) => ("F", true),
+            Text(RoleNoun(Water)) => ("K", true),
+            Text(VerbIs) => ("I", true),
+            Text(PropYou) => ("Y", true),
+            Text(PropStop) => ("S", true),
+            Text(PropPush) => ("P", true),
+            Text(PropWin) => ("X", true),
+            Text(PropSink) => ("N", true),
+            Object(Baba) => ("b", false),
+            Object(Wall) => ("#", false),
+            Object(Rock) => ("o", false),
+            Object(Flag) => ("f", false),
+            Object(Water) => ("~", false),
+        }
+    }
+
     pub fn compile_rules(&mut self) {
         self.rules = RuleSet::default();
         for i in 0..MAX_ENTITIES {
@@ -175,7 +367,10 @@ impl BabaGame {
             }
             if let EntityKind::Text(TokenRole::Noun(subj)) = self.entities[i].kind {
                 for j in 0..MAX_ENTITIES {
-                    if !self.entities[j].active || self.entities[j].x != tx || self.entities[j].y != ty {
+                    if !self.entities[j].active
+                        || self.entities[j].x != tx
+                        || self.entities[j].y != ty
+                    {
                         continue;
                     }
                     if let EntityKind::Text(role) = self.entities[j].kind {
@@ -185,7 +380,9 @@ impl BabaGame {
                             TokenRole::PropPush => self.rules.props[subj as usize] |= 1 << BIT_PUSH,
                             TokenRole::PropWin => self.rules.props[subj as usize] |= 1 << BIT_WIN,
                             TokenRole::PropSink => self.rules.props[subj as usize] |= 1 << BIT_SINK,
-                            TokenRole::Noun(target) => self.rules.transform[subj as usize] = Some(target),
+                            TokenRole::Noun(target) => {
+                                self.rules.transform[subj as usize] = Some(target)
+                            }
                             _ => {}
                         }
                     }
@@ -231,8 +428,8 @@ impl BabaGame {
 
     pub fn step(&mut self, dx: i8, dy: i8) -> bool {
         if self.won {
-            self.level_idx = (self.level_idx + 1) % DEFAULT_LEVELS.len();
-            self.load_ascii_level(DEFAULT_LEVELS[self.level_idx]);
+            let next = (self.level_idx + 1) % self.total_levels();
+            self.load_level_by_index(next);
             return true;
         }
 
@@ -341,6 +538,256 @@ impl BabaGame {
             }
         }
         self.lost = !any_you;
+    }
+
+    #[must_use]
+    pub fn outcome(&self) -> BabaOutcome {
+        if self.won {
+            BabaOutcome::Won
+        } else if self.lost {
+            BabaOutcome::Lost
+        } else {
+            BabaOutcome::InProgress
+        }
+    }
+
+    #[must_use]
+    pub fn active_rules_count(&self) -> usize {
+        let prop_bits: usize = self
+            .rules
+            .props
+            .iter()
+            .map(|bits| bits.count_ones() as usize)
+            .sum();
+        let transforms = self
+            .rules
+            .transform
+            .iter()
+            .filter(|target| target.is_some())
+            .count();
+        prop_bits + transforms
+    }
+
+    #[must_use]
+    pub fn primary_you_coords(&self) -> (usize, usize) {
+        for e in &self.entities {
+            if e.active && self.entity_has_prop(e, BIT_YOU) {
+                return (e.y.max(0) as usize, e.x.max(0) as usize);
+            }
+        }
+        (0, 0)
+    }
+
+    pub fn render_initial(&self, canvas: &mut NativeGameCanvas) -> Result<(), String> {
+        self.render_commands(canvas)?;
+        canvas.reset_dirty_regions();
+        canvas.invalidate_rect(DirtyRect::new(0, 0, 480, 800));
+        canvas.request_refresh();
+        Ok(())
+    }
+
+    pub fn apply_motion_and_render(
+        &mut self,
+        event: ImuDetectedEvent,
+        canvas: &mut NativeGameCanvas,
+    ) -> Result<Option<BabaEventResult>, String> {
+        let ImuDetectedEventKind::Tilt(axis) = event.kind else {
+            return Ok(None);
+        };
+        let Some(direction) = BabaDirection::from_raw_axis(axis) else {
+            return Ok(None);
+        };
+        let (dx, dy) = direction.delta();
+        let was_won = self.won;
+        let moved = self.step(dx, dy);
+
+        let reason = if was_won {
+            self.status = format!("Level {} started  Tilt to move", self.level_idx + 1);
+            "level-advance"
+        } else if !moved {
+            self.status = format!("{} blocked  UP undo  SELECT reset", direction.label());
+            "blocked"
+        } else if self.won {
+            self.status = format!(
+                "YOU WIN in {} steps! Tilt/SELECT next",
+                self.steps
+            );
+            "goal-reached"
+        } else if self.lost {
+            self.status = "NO 'YOU' LEFT! Press UP to undo".into();
+            "no-you"
+        } else {
+            self.status = format!(
+                "{} moved ({} rules active)",
+                direction.label(),
+                self.active_rules_count()
+            );
+            "tilt-move"
+        };
+
+        self.render_commands(canvas)?;
+        canvas.reset_dirty_regions();
+        let dirty_regions = if moved || was_won {
+            vec![BABA_HEADER_RECT, BABA_BOARD_RECT, BABA_STATUS_RECT]
+        } else {
+            vec![BABA_STATUS_RECT]
+        };
+        for rect in &dirty_regions {
+            canvas.invalidate_rect(*rect);
+        }
+        canvas.request_refresh();
+        Ok(Some(self.build_result(
+            reason,
+            direction.marker(),
+            axis.marker(),
+            dirty_regions,
+        )))
+    }
+
+    pub fn apply_button_and_render(
+        &mut self,
+        event: ButtonEvent,
+        canvas: &mut NativeGameCanvas,
+    ) -> Result<Option<BabaEventResult>, String> {
+        let reason = match event {
+            ButtonEvent::Up => {
+                if self.undo() {
+                    self.status = format!("Undo (steps: {})", self.steps);
+                    "undo"
+                } else {
+                    self.status = "Nothing to undo".into();
+                    "undo-empty"
+                }
+            }
+            ButtonEvent::Down => {
+                let next = (self.level_idx + 1) % self.total_levels();
+                self.load_level_by_index(next);
+                self.status = format!("Switched to Level {}", self.level_idx + 1);
+                "level-next"
+            }
+            ButtonEvent::Select => {
+                if self.won {
+                    let next = (self.level_idx + 1) % self.total_levels();
+                    self.load_level_by_index(next);
+                    self.status = format!("Level {}  Tilt to move", self.level_idx + 1);
+                    "level-advance"
+                } else {
+                    let current = self.level_idx;
+                    self.load_level_by_index(current);
+                    self.status = "Level reset  Tilt to move".into();
+                    "reset"
+                }
+            }
+        };
+
+        self.render_commands(canvas)?;
+        canvas.reset_dirty_regions();
+        let dirty_regions = vec![BABA_HEADER_RECT, BABA_BOARD_RECT, BABA_STATUS_RECT];
+        for rect in &dirty_regions {
+            canvas.invalidate_rect(*rect);
+        }
+        canvas.request_refresh();
+        Ok(Some(self.build_result(reason, "none", "none", dirty_regions)))
+    }
+
+    fn build_result(
+        &self,
+        reason: &'static str,
+        direction: &'static str,
+        raw_axis: &'static str,
+        dirty_regions: Vec<DirtyRect>,
+    ) -> BabaEventResult {
+        let (row, column) = self.primary_you_coords();
+        BabaEventResult {
+            reason,
+            row,
+            column,
+            moves: self.steps,
+            rules_count: self.active_rules_count(),
+            outcome: self.outcome(),
+            direction,
+            raw_axis,
+            dirty_regions,
+        }
+    }
+
+    fn render_commands(&self, canvas: &mut NativeGameCanvas) -> Result<(), String> {
+        canvas.clear_frame();
+        canvas.text(
+            24,
+            82,
+            format!(
+                "Baba Tilt   Lv {}/{}",
+                self.level_idx + 1,
+                self.total_levels()
+            ),
+            CanvasTextStyle::Heading,
+        )?;
+        canvas.text(
+            24,
+            126,
+            "UPPER=Word [B I Y]  lower=Obj (b # o f ~)".into(),
+            CanvasTextStyle::Detail,
+        )?;
+
+        canvas.grid(
+            BABA_GRID_X,
+            BABA_GRID_Y,
+            GRID_W as u8,
+            GRID_H as u8,
+            BABA_CELL_SIZE,
+            BABA_CELL_SIZE,
+        )?;
+
+        for e in &self.entities {
+            if !e.active {
+                continue;
+            }
+            let cx = BABA_GRID_X + (e.x as i32) * BABA_CELL_SIZE;
+            let cy = BABA_GRID_Y + (e.y as i32) * BABA_CELL_SIZE;
+            let (glyph, is_text_token) = Self::kind_glyph(e.kind);
+
+            if is_text_token {
+                canvas.rect(
+                    cx + 3,
+                    cy + 3,
+                    BABA_CELL_SIZE - 6,
+                    BABA_CELL_SIZE - 6,
+                    false,
+                )?;
+                canvas.text(cx + 10, cy + 25, glyph.into(), CanvasTextStyle::Heading)?;
+            } else if e.kind == EntityKind::Object(Noun::Wall) {
+                canvas.rect(
+                    cx + 5,
+                    cy + 5,
+                    BABA_CELL_SIZE - 10,
+                    BABA_CELL_SIZE - 10,
+                    true,
+                )?;
+            } else {
+                canvas.text(cx + 10, cy + 25, glyph.into(), CanvasTextStyle::Body)?;
+            }
+        }
+
+        canvas.text(
+            24,
+            634,
+            format!(
+                "STEPS {}   RULES {}   {}",
+                self.steps,
+                self.active_rules_count(),
+                self.outcome().marker().to_ascii_uppercase()
+            ),
+            CanvasTextStyle::Heading,
+        )?;
+        canvas.text(24, 682, self.status.clone(), CanvasTextStyle::Body)?;
+        canvas.text(
+            24,
+            734,
+            "TILT move  UP undo  DN next lv  SELECT reset".into(),
+            CanvasTextStyle::Body,
+        )?;
+        Ok(())
     }
 }
 
