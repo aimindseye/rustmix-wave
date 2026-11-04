@@ -257,8 +257,8 @@ impl BabaGame {
         if self.custom_levels.is_empty() {
             self.load_ascii_level(DEFAULT_LEVELS[self.level_idx]);
         } else {
-            let refs: [&str; GRID_H] =
-                std::array::from_fn(|i| self.custom_levels[self.level_idx][i].as_str());
+            let custom = self.custom_levels[self.level_idx].clone();
+            let refs: [&str; GRID_H] = std::array::from_fn(|i| custom[i].as_str());
             self.load_ascii_level(&refs);
         }
     }
