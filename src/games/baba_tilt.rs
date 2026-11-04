@@ -180,9 +180,7 @@ pub const BIT_SINK: u8 = 4;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BabaGame {
     pub entities: [Entity; MAX_ENTITIES],
-    pub undo_ring: [[Entity; MAX_ENTITIES]; MAX_UNDO],
-    pub undo_head: usize,
-    pub undo_len: usize,
+    pub undo_stack: Vec<[Entity; MAX_ENTITIES]>,
     pub rules: RuleSet,
     pub steps: u32,
     pub won: bool,
@@ -203,9 +201,7 @@ impl BabaGame {
     pub fn new() -> Self {
         let mut game = Self {
             entities: [Entity::empty(); MAX_ENTITIES],
-            undo_ring: [[Entity::empty(); MAX_ENTITIES]; MAX_UNDO],
-            undo_head: 0,
-            undo_len: 0,
+            undo_stack: Vec::new(),
             rules: RuleSet::default(),
             steps: 0,
             won: false,
@@ -265,8 +261,7 @@ impl BabaGame {
 
     pub fn load_ascii_level(&mut self, rows: &[&str; GRID_H]) {
         self.entities = [Entity::empty(); MAX_ENTITIES];
-        self.undo_head = 0;
-        self.undo_len = 0;
+        self.undo_stack.clear();
         self.steps = 0;
         self.won = false;
         self.lost = false;
@@ -457,11 +452,10 @@ impl BabaGame {
             return false;
         }
 
-        self.undo_ring[self.undo_head] = snapshot;
-        self.undo_head = (self.undo_head + 1) % MAX_UNDO;
-        if self.undo_len < MAX_UNDO {
-            self.undo_len += 1;
+        if self.undo_stack.len() >= MAX_UNDO {
+            self.undo_stack.remove(0);
         }
+        self.undo_stack.push(snapshot);
 
         for i in 0..MAX_ENTITIES {
             if to_move[i] {
@@ -511,12 +505,10 @@ impl BabaGame {
     }
 
     pub fn undo(&mut self) -> bool {
-        if self.undo_len == 0 {
+        let Some(prev) = self.undo_stack.pop() else {
             return false;
-        }
-        self.undo_head = (self.undo_head + MAX_UNDO - 1) % MAX_UNDO;
-        self.entities = self.undo_ring[self.undo_head];
-        self.undo_len -= 1;
+        };
+        self.entities = prev;
         self.steps = self.steps.saturating_sub(1);
         self.compile_rules();
         self.evaluate_status();
