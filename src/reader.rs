@@ -14,11 +14,17 @@ use std::{
 
 use crate::{
     buttons::ButtonEvent,
-    epub::{open_epub_on_worker, read_epub_title_on_worker, EpubDocument, EpubTocEntry},
+    epub::{
+        open_epub_on_worker, read_epub_ao3_on_worker, read_epub_title_on_worker, EpubAo3Meta,
+        EpubDocument, EpubTocEntry,
+    },
 };
+
 
 /// SD-card library owned by the Reader subsystem.
 pub const READER_BOOKS_DIRECTORY: &str = "/sdcard/RUSTMIX/BOOKS";
+/// SD-card library owned by ? girl the fanfic.
+pub const READER_FANFIC_DIRECTORY: &str = "/sdcard/RUSTMIX/BOOKS/FANFIC";
 /// SD-card state directory owned by the Reader subsystem.
 pub const READER_STATE_DIRECTORY: &str = "/sdcard/RUSTMIX/READER";
 /// Persistent last-read state file.
@@ -111,6 +117,7 @@ pub struct ReaderBook {
     pub format: BookFormat,
     pub size_bytes: u64,
     pub modified_seconds: u64,
+    pub ao3: Option<EpubAo3Meta>,
 }
 
 /// Chapter-relative EPUB page presentation retained with bookmarks so MARKS.TXT
@@ -183,6 +190,7 @@ pub enum ReaderLibraryTab {
     Recent,
     #[default]
     Books,
+    Fanfic,
     Files,
     Bookmarks,
 }
@@ -193,8 +201,9 @@ impl ReaderLibraryTab {
         match self {
             Self::Recent => "Recent",
             Self::Books => "Books",
+            Self::Fanfic => "Fanfic",
             Self::Files => "Files",
-            Self::Bookmarks => "Bookmarks",
+            Self::Bookmarks => "Marks",
         }
     }
 
@@ -202,7 +211,8 @@ impl ReaderLibraryTab {
     pub const fn next(self) -> Self {
         match self {
             Self::Recent => Self::Books,
-            Self::Books => Self::Files,
+            Self::Books => Self::Fanfic,
+            Self::Fanfic => Self::Files,
             Self::Files => Self::Bookmarks,
             Self::Bookmarks => Self::Recent,
         }
@@ -1288,6 +1298,8 @@ impl ReaderUiState {
                 self.library_error = Some(error);
             }
         }
+        let fanfic_path = Path::new(&self.books_root).join("FANFIC");
+        self.fanfics = scan_fanfic_library(&fanfic_path).unwrap_or_default();
         self.library_selected = 0;
     }
 
@@ -1325,6 +1337,15 @@ impl ReaderUiState {
                     book,
                 })
                 .collect(),
+            ReaderLibraryTab::Fanfic => self
+                .fanfics
+                .iter()
+                .cloned()
+                .map(|book| ReaderLibraryEntry {
+                    location: self.saved_position_for_book(&book),
+                    book,
+                })
+                .collect(),      
             ReaderLibraryTab::Bookmarks => self
                 .bookmarks
                 .iter()
@@ -1334,6 +1355,7 @@ impl ReaderUiState {
                     location: Some(location),
                 })
                 .collect(),
+            
         }
     }
 
@@ -2282,6 +2304,22 @@ pub fn scan_txt_library(root: impl AsRef<Path>) -> Result<Vec<ReaderBook>, Strin
     }
     books.sort_by(|left, right| left.title.to_lowercase().cmp(&right.title.to_lowercase()));
     Ok(books)
+}
+
+/// add scan_fanfic_library
+pub fn scan_fanfic_library(root: impl AsRef<Path>) -> Result<Vec<ReaderBook>, String> {
+    let mut works = scan_txt_library(root)?;
+    for book in &mut works {
+        if book.format == BookFormat::Epub {
+            if let Ok((title, ao3)) = read_epub_ao3_on_worker(&book.path) {
+                if !title.trim().is_empty() {
+                    book.title = title;
+                }
+                book.ao3 = Some(ao3);
+            }
+        }
+    }
+    Ok(works)
 }
 
 #[must_use]
