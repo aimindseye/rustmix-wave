@@ -160,6 +160,7 @@ impl ReaderLocation {
             format: self.format,
             size_bytes: self.size_bytes,
             modified_seconds: self.modified_seconds,
+            ao3: None,
         }
     }
 
@@ -1154,6 +1155,7 @@ pub struct ReaderUiState {
     pub books_root: String,
     pub state_root: String,
     pub books: Vec<ReaderBook>,
+    pub fanfics: Vec<ReaderBook>,
     pub positions: Vec<ReaderLocation>,
     pub recent: Vec<ReaderLocation>,
     pub bookmarks: Vec<ReaderLocation>,
@@ -1183,6 +1185,7 @@ impl Default for ReaderUiState {
             books_root: READER_BOOKS_DIRECTORY.into(),
             state_root: READER_STATE_DIRECTORY.into(),
             books: Vec::new(),
+            fanfics: Vec::new(),
             positions: Vec::new(),
             recent: Vec::new(),
             bookmarks: Vec::new(),
@@ -2297,6 +2300,7 @@ pub fn scan_txt_library(root: impl AsRef<Path>) -> Result<Vec<ReaderBook>, Strin
             format,
             size_bytes,
             modified_seconds,
+            ao3: None,
         });
         if books.len() >= READER_LIBRARY_LIMIT {
             break;
