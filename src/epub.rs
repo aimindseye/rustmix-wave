@@ -59,10 +59,41 @@ pub struct EpubChapter {
     pub spine_index: usize,
 }
 
+/// AO3 metadata extracted from OPF `<dc:creator>`, `<dc:description>`, and `<dc:subject>` tags.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EpubAo3Meta {
+    pub author: String,
+    pub fandom: String,
+    pub rating: char,   // 'G', 'T', 'M', 'E'
+    pub category: char, // '/', 'F', 'O', '+'
+    pub warning: char,  // '!', '?', '-'
+    pub status: char,   // '=', '?'
+    pub tags: Vec<String>,
+    pub summary: String,
+    pub words: String,
+}
+
+impl Default for EpubAo3Meta {
+    fn default() -> Self {
+        Self {
+            author: "Anonymous".into(),
+            fandom: "Archive of Our Own".into(),
+            rating: 'T',
+            category: '/',
+            warning: '-',
+            status: '=',
+            tags: Vec::new(),
+            summary: String::new(),
+            words: String::new(),
+        }
+    }
+}
+
 /// One bounded, reflowable EPUB book retained while the Reader session is open.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EpubDocument {
     pub title: String,
+    pub ao3: EpubAo3Meta,
     pub text: String,
     pub toc: Vec<EpubTocEntry>,
     pub chapters: Vec<EpubChapter>,
@@ -321,6 +352,108 @@ fn package_title(package: &str) -> String {
     first_element_text(package, "title")
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "Untitled EPUB".into())
+}
+
+/// Lightweight worker to read both title and AO3 OPF metadata during Library scans.
+pub fn read_epub_ao3_on_worker(path: impl AsRef<Path>) -> Result<(String, EpubAo3Meta), String> {
+    let path = path.as_ref().to_path_buf();
+    let worker = std::thread::Builder::new()
+        .name("epub-ao3".into())
+        .stack_size(EPUB_TITLE_WORKER_STACK_BYTES)
+        .spawn(move || {
+            let archive = ZipArchive::open(path)?;
+            let (_, package, _) = epub_package(&archive)?;
+            let title = package_title(&package);
+            let ao3 = parse_ao3_opf_metadata(&package, 0);
+            Ok((title, ao3))
+        })
+        .map_err(|error| format!("EPUB AO3 worker start failed: {error}"))?;
+    worker
+        .join()
+        .map_err(|_| "EPUB AO3 worker panicked".to_string())?
+}
+
+fn all_element_texts(xml: &str, local_name: &str) -> Vec<String> {
+    let mut results = Vec::new();
+    let mut cursor = 0;
+    while cursor < xml.len() {
+        let Some(start_rel) = xml[cursor..].find('<') else { break };
+        let start = cursor + start_rel;
+        let Some(end_rel) = xml[start + 1..].find('>') else { break };
+        let end = start + 1 + end_rel;
+        let tag = &xml[start + 1..end];
+        let trimmed = tag.trim_start();
+        let name = trimmed
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .next()
+            .unwrap_or("");
+        if !trimmed.starts_with('/') && name.rsplit(':').next() == Some(local_name) {
+            let close = format!("</{name}>");
+            if let Some(close_rel) = xml[end + 1..].find(&close) {
+                let text = html_to_text(&xml[end + 1..end + 1 + close_rel]);
+                if !text.trim().is_empty() {
+                    results.push(text.trim().to_string());
+                }
+                cursor = end + 1 + close_rel + close.len();
+                continue;
+            }
+        }
+        cursor = end + 1;
+    }
+    results
+}
+
+fn parse_ao3_opf_metadata(package: &str, word_count: usize) -> EpubAo3Meta {
+    let mut meta = EpubAo3Meta::default();
+    if let Some(creator) = first_element_text(package, "creator").filter(|s| !s.trim().is_empty()) {
+        meta.author = creator.trim().to_string();
+    }
+    if let Some(desc) = first_element_text(package, "description").filter(|s| !s.trim().is_empty()) {
+        meta.summary = desc.replace('\n', " ").trim().to_string();
+    }
+    let subjects = all_element_texts(package, "subject");
+    let mut custom_tags = Vec::new();
+    for subj in subjects {
+        let lower = subj.to_ascii_lowercase();
+        if lower.contains("explicit") {
+            meta.rating = 'E';
+        } else if lower.contains("mature") {
+            meta.rating = 'M';
+        } else if lower.contains("teen") {
+            meta.rating = 'T';
+        } else if lower.contains("general audiences") {
+            meta.rating = 'G';
+        } else if subj == "M/M" || subj == "F/F" {
+            meta.category = '/';
+        } else if subj == "F/M" || subj == "M/F" {
+            meta.category = 'F';
+        } else if subj == "Gen" {
+            meta.category = 'O';
+        } else if subj == "Multi" {
+            meta.category = '+';
+        } else if lower.contains("no archive warnings apply") {
+            meta.warning = '-';
+        } else if lower.contains("chose not to use archive warnings") {
+            meta.warning = '?';
+        } else if lower.contains("warning") || lower.contains("violence") || lower.contains("death") {
+            meta.warning = '!';
+        } else if lower != "fanfiction" && !lower.starts_with("ao3") {
+            if meta.fandom == "Archive of Our Own" {
+                meta.fandom = subj;
+            } else if custom_tags.len() < 6 {
+                custom_tags.push(subj);
+            }
+        }
+    }
+    if custom_tags.is_empty() {
+        custom_tags.push("AO3 Work".into());
+        custom_tags.push("Fanfiction".into());
+    }
+    meta.tags = custom_tags;
+    if word_count > 0 {
+        meta.words = word_count.to_string();
+    }
+    meta
 }
 
 /// Open one EPUB archive and produce a bounded reflowable document.
