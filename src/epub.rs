@@ -530,6 +530,7 @@ pub fn open_epub(path: impl AsRef<Path>) -> Result<EpubDocument, String> {
     }
     dedupe_toc(&mut toc);
     toc.truncate(EPUB_TOC_LIMIT);
+    let ao3 = parse_ao3_opf_metadata(&package, text.split_whitespace().count());
     Ok(EpubDocument {
         title,
         ao3,
