@@ -532,6 +532,7 @@ pub fn open_epub(path: impl AsRef<Path>) -> Result<EpubDocument, String> {
     toc.truncate(EPUB_TOC_LIMIT);
     Ok(EpubDocument {
         title,
+        ao3,
         text,
         toc,
         chapters,
