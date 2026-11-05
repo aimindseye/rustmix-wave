@@ -340,6 +340,16 @@ fn draw_ao3_blurb_card(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReaderBook {
+    pub path: String,
+    pub title: String,
+    pub format: BookFormat,
+    pub size_bytes: u64,
+    pub modified_seconds: u64,
+    pub ao3: Option<EpubAo3Meta>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct LibraryStatus {
     left: &'static str,
     middle: String,
