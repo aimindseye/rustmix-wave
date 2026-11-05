@@ -636,6 +636,7 @@ mod firmware {
         let mut last_imu_event_screen_refresh = Instant::now();
         let mut weather_retry = WeatherRetryState::default();
         let mut last_voice_record_refresh = Instant::now();
+        let boot_started_at = Instant::now();
         loop {
             maintain_wifi_transfer_server(
                 &mut wifi_transfer_server,
@@ -848,16 +849,32 @@ mod firmware {
                 }
             }
 
-            if !sleep_network.is_suspended() {
-                // Only attempt Wi-Fi reconnect when the user explicitly opens Network or Weather screens
-                let on_network_screen = matches!(
-                    state.active_route(),
-                    ScreenRoute::Network
-                        | ScreenRoute::NetworkDetails
-                        | ScreenRoute::Weather
-                        | ScreenRoute::WeatherDetails
-                );
+            let on_network_screen = matches!(
+                state.active_route(),
+                ScreenRoute::Network
+                    | ScreenRoute::NetworkDetails
+                    | ScreenRoute::Weather
+                    | ScreenRoute::WeatherDetails
+            ) || wifi_transfer_server.is_some();
 
+            // Wake the radio on-demand if the user enters Network or Weather screens
+            if sleep_network.is_suspended() && on_network_screen && state.panel_awake {
+                if last_network_log.elapsed() >= Duration::from_secs(15) {
+                    info!("rustmix-wave=wifi-on-demand-wake status=resuming");
+                    resume_network_after_sleep(
+                        &mut network_runtime,
+                        network_config.as_ref(),
+                        &mut state,
+                        &mut sleep_network,
+                        &mut last_network_fingerprint,
+                        &mut last_network_log,
+                        &mut last_weather_attempt,
+                        &mut weather_retry,
+                    );
+                }
+            }
+
+            if !sleep_network.is_suspended() {
                 if on_network_screen
                     && state.network.wifi_state != WifiConnectionState::Connected
                     && last_network_log.elapsed() >= Duration::from_secs(15)
@@ -916,14 +933,44 @@ mod firmware {
                 if latest_network != state.network {
                     state.update_network_snapshot(latest_network);
                 }
-                let latest_fingerprint = state.network.log_fingerprint();
-                if latest_fingerprint != last_network_fingerprint
-                    || last_network_log.elapsed()
-                        >= Duration::from_secs(NETWORK_LOG_HEARTBEAT_SECONDS)
-                {
-                    log_network_snapshot(&state.network);
-                    last_network_fingerprint = latest_fingerprint;
-                    last_network_log = Instant::now();
+
+                // Power-saving check: shut down the 2.4GHz modem if:
+                // 1. Panel went to idle sleep (`!state.panel_awake`), OR
+                // 2. Wi-Fi failed (`WifiConnectionState::Failed`) and user is not on Network/Weather, OR
+                // 3. Initial boot sync (weather + 45s window) is done and user is not on Network/Weather
+                let initial_sync_done = (last_weather_attempt.is_some()
+                    && !weather_retry.is_pending()
+                    && boot_started_at.elapsed() >= Duration::from_secs(45))
+                    || boot_started_at.elapsed() >= Duration::from_secs(90);
+
+                let should_power_down_wifi = !on_network_screen
+                    && (!state.panel_awake
+                        || state.network.wifi_state == WifiConnectionState::Failed
+                        || initial_sync_done);
+
+                if should_power_down_wifi {
+                    info!(
+                        "rustmix-wave=wifi-power-save status=suspending-radio panel-awake={} wifi-state={}",
+                        state.panel_awake,
+                        state.network.wifi_state.label()
+                    );
+                    let _ = suspend_network_for_sleep(
+                        &mut network_runtime,
+                        &mut state,
+                        &mut sleep_network,
+                        &mut last_network_fingerprint,
+                        &mut last_network_log,
+                    );
+                } else {
+                    let latest_fingerprint = state.network.log_fingerprint();
+                    if latest_fingerprint != last_network_fingerprint
+                        || last_network_log.elapsed()
+                            >= Duration::from_secs(NETWORK_LOG_HEARTBEAT_SECONDS)
+                    {
+                        log_network_snapshot(&state.network);
+                        last_network_fingerprint = latest_fingerprint;
+                        last_network_log = Instant::now();
+                    }
                 }
             }
 
@@ -1526,8 +1573,21 @@ mod firmware {
                         panel_refresh.reset_after_external_global(PanelGlobalReason::AfterWake);
                         sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
                     }
-                    state.update_board_snapshot(board_services.read_snapshot(&mut service_delay));
-                    log_board_snapshot(state.board, state.regional);
+                    if last_status_refresh.elapsed() >= Duration::from_secs(30)
+                        || matches!(
+                            state.active_route(),
+                            ScreenRoute::Home
+                                | ScreenRoute::Environment
+                                | ScreenRoute::EnvironmentDetails
+                                | ScreenRoute::Motion
+                                | ScreenRoute::MotionDetails
+                                | ScreenRoute::Clock
+                                | ScreenRoute::ClockDetails
+                        )
+                    {
+                        state.update_board_snapshot(board_services.read_snapshot(&mut service_delay));
+                        log_board_snapshot(state.board, state.regional);
+                    }
                     let previous_route = state.active_route();
                     if previous_route == ScreenRoute::Home {
                         info!("rustmix-wave=hierarchical-back outcome=ignored route=home");
@@ -1629,10 +1689,23 @@ mod firmware {
                             panel_refresh.reset_after_external_global(PanelGlobalReason::AfterWake);
                             sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
                         }
-                        state.update_board_snapshot(
-                            board_services.read_snapshot(&mut service_delay),
-                        );
-                        log_board_snapshot(state.board, state.regional);
+                        if last_status_refresh.elapsed() >= Duration::from_secs(30)
+                            || matches!(
+                                state.active_route(),
+                                ScreenRoute::Home
+                                    | ScreenRoute::Environment
+                                    | ScreenRoute::EnvironmentDetails
+                                    | ScreenRoute::Motion
+                                    | ScreenRoute::MotionDetails
+                                    | ScreenRoute::Clock
+                                    | ScreenRoute::ClockDetails
+                            )
+                        {
+                            state.update_board_snapshot(
+                                board_services.read_snapshot(&mut service_delay),
+                            );
+                            log_board_snapshot(state.board, state.regional);
+                        }
                         log_lua_runtime_events(&mut state);
                         let request = if woke_from_sleep {
                             RefreshRequest::ForceGlobalAfterWake
@@ -1673,8 +1746,21 @@ mod firmware {
                     sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
                 }
 
-                state.update_board_snapshot(board_services.read_snapshot(&mut service_delay));
-                log_board_snapshot(state.board, state.regional);
+                if last_status_refresh.elapsed() >= Duration::from_secs(30)
+                    || matches!(
+                        state.active_route(),
+                        ScreenRoute::Home
+                            | ScreenRoute::Environment
+                            | ScreenRoute::EnvironmentDetails
+                            | ScreenRoute::Motion
+                            | ScreenRoute::MotionDetails
+                            | ScreenRoute::Clock
+                            | ScreenRoute::ClockDetails
+                    )
+                {
+                    state.update_board_snapshot(board_services.read_snapshot(&mut service_delay));
+                    log_board_snapshot(state.board, state.regional);
+                }
                 let previous_route = state.active_route();
                 let previous_display = state.display;
                 if previous_route == ScreenRoute::Files {
