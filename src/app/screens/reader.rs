@@ -1,4 +1,4 @@
-//! Reader landing, library, bookmarks, loading, TXT / EPUB page, TOC and options screens.
+//! Reader landing, library, AO3 fanfic blurb cards, bookmarks, loading, TXT / EPUB page, TOC and options screens.
 
 use core::convert::Infallible;
 
@@ -19,10 +19,11 @@ use crate::{
             status_row::{draw_status_row, StatusRow},
         },
     },
+    epub::EpubAo3Meta,
     orientation::OrientedFrameBuffer,
     reader::{
-        BookFormat, ParagraphAlignment, ReaderLibraryTab, ReaderLoadingStage, ReaderOption,
-        ReadingPreference, ReadingTheme,
+        BookFormat, ParagraphAlignment, ReaderBook, ReaderLibraryTab, ReaderLoadingStage,
+        ReaderOption, ReadingPreference, ReadingTheme,
     },
 };
 
@@ -72,7 +73,7 @@ pub fn render_continue_reading(
     } else {
         Text::new("No saved book", Point::new(24, 190), heading).draw(display)?;
         Text::new(
-            "Open Library and choose a TXT book.",
+            "Open Library and choose a TXT or EPUB work.",
             Point::new(24, 240),
             body,
         )
@@ -94,7 +95,18 @@ pub fn render_library(
     let reader = &state.reader;
     let body = state.display.body_style();
     let detail = state.display.detail_style();
-    draw_header(display, state.display, "LIBRARY", "TXT / REFLOWABLE EPUB")?;
+
+    if reader.library_tab == ReaderLibraryTab::Fanfic {
+        draw_header(
+            display,
+            state.display,
+            "AO3 // ARCHIVE OF OUR OWN",
+            "RUSTMIX/BOOKS/FANFIC",
+        )?;
+    } else {
+        draw_header(display, state.display, "LIBRARY", "TXT / REFLOWABLE EPUB")?;
+    }
+
     let status = library_status(reader.library_tab, reader.visible_entries().len());
     draw_status_row(
         display,
@@ -111,12 +123,13 @@ pub fn render_library(
     draw_row(
         display,
         state,
-        188,
+        182,
         control_selected,
-        "Change tab",
+        "Change tab (Books / Fanfic / Marks)",
         "SELECT",
-        "TABS",
+        "TAB",
     )?;
+
     let visible = reader.visible_entries();
     if visible.is_empty() {
         let message = reader
@@ -124,11 +137,43 @@ pub fn render_library(
             .as_deref()
             .unwrap_or(match reader.library_tab {
                 ReaderLibraryTab::Recent => "No recent books yet.",
+                ReaderLibraryTab::Fanfic => "Put 8.3 .EPU/.TXT fics in /RUSTMIX/BOOKS/FANFIC.",
                 ReaderLibraryTab::Bookmarks => "No saved bookmarks yet.",
                 _ => "Copy TXT or EPUB books into /RUSTMIX/BOOKS.",
             });
-        Text::new(&truncate(message, 54), Point::new(26, 302), body).draw(display)?;
+        Text::new(&truncate(message, 52), Point::new(24, 302), body).draw(display)?;
+        return draw_footer(
+            display,
+            state.display,
+            "MOVE  SELECT OPEN/TAB  HOLD BOOT BACK",
+        );
     }
+
+    // ========================================================================
+    // 1-BIT AO3 VISUAL DESIGN IN FANFIC TAB (2 Blurb Cards per Page)
+    // ========================================================================
+    if reader.library_tab == ReaderLibraryTab::Fanfic {
+        let active_idx = reader.library_selected.saturating_sub(1);
+        let page_start = (active_idx / 2) * 2;
+        for (slot, index) in (page_start..(page_start + 2).min(visible.len())).enumerate() {
+            let selected = reader.library_selected == index + 1;
+            let card_top = 240 + (slot as i32) * 246;
+            draw_ao3_blurb_card(
+                display,
+                state,
+                card_top,
+                &visible[index].book,
+                selected,
+                None,
+            )?;
+        }
+        return draw_footer(
+            display,
+            state.display,
+            "UP/DOWN BROWSE AO3  SELECT READ  BOOT BACK",
+        );
+    }
+
     for (index, entry) in visible.iter().take(7).enumerate() {
         let selected = reader.library_selected == index + 1;
         let columns = library_entry_columns(reader, entry);
@@ -157,6 +202,143 @@ pub fn render_library(
     )
 }
 
+/// Draws the 1-Bit AO3 2x2 Symbol Grid + Title/Author + Pill Tags + Blockquote Summary + Stats
+fn draw_ao3_blurb_card(
+    display: &mut OrientedFrameBuffer<'_>,
+    state: &AppState,
+    top: i32,
+    book: &ReaderBook,
+    selected: bool,
+    page_info: Option<&str>,
+) -> Result<(), Infallible> {
+    let default_meta = EpubAo3Meta::default();
+    let meta = book.ao3.as_ref().unwrap_or(&default_meta);
+    let heading = state.display.heading_style();
+    let body = state.display.body_style();
+    let detail = state.display.detail_style();
+
+    // Outer AO3 Blurb Frame (Double border when highlighted)
+    Rectangle::new(Point::new(14, top), Size::new(452, 236))
+        .into_styled(PrimitiveStyle::with_stroke(
+            BinaryColor::On,
+            if selected { 3 } else { 1 },
+        ))
+        .draw(display)?;
+
+    // 1. 2x2 AO3 Symbol Grid (Top-Left: Rating, Top-Right: Category, Bot-Left: Warning, Bot-Right: Status)
+    let gx = 24;
+    let gy = top + 12;
+    for (dx, dy, sym, invert) in [
+        (0, 0, meta.rating, selected),
+        (24, 0, meta.category, false),
+        (0, 24, meta.warning, false),
+        (24, 24, meta.status, false),
+    ] {
+        let cell_pt = Point::new(gx + dx, gy + dy);
+        if invert {
+            Rectangle::new(cell_pt, Size::new(22, 22))
+                .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                .draw(display)?;
+            Text::new(
+                &sym.to_string(),
+                Point::new(gx + dx + 6, gy + dy + 16),
+                state.display.text_style(UiTextRole::Detail, BinaryColor::Off),
+            )
+            .draw(display)?;
+        } else {
+            Rectangle::new(cell_pt, Size::new(22, 22))
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                .draw(display)?;
+            Text::new(
+                &sym.to_string(),
+                Point::new(gx + dx + 6, gy + dy + 16),
+                detail,
+            )
+            .draw(display)?;
+        }
+    }
+
+    // 2. Title, Author & Fandom next to the 2x2 Grid
+    let prefix = if selected { "> " } else { "" };
+    Text::new(
+        &truncate(&format!("{prefix}{}", book.title), 26),
+        Point::new(80, top + 28),
+        heading,
+    )
+    .draw(display)?;
+    Text::new(
+        &truncate(&format!("by {}", meta.author), 34),
+        Point::new(80, top + 48),
+        body,
+    )
+    .draw(display)?;
+    Text::new(
+        &truncate(&meta.fandom, 38),
+        Point::new(80, top + 64),
+        detail,
+    )
+    .draw(display)?;
+
+    // Divider line
+    Rectangle::new(Point::new(24, top + 72), Size::new(432, 1))
+        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+        .draw(display)?;
+
+    // 3. Pill-Box Tags (`[Ship/Pairing] [Tag]`)
+    let mut tx = 24;
+    let ty = top + 78;
+    for tag in meta.tags.iter().take(3) {
+        let clean = truncate(tag, 16);
+        let pill_w = (clean.len() as i32 * 8 + 14).min(140);
+        if tx + pill_w > 454 {
+            break;
+        }
+        Rectangle::new(Point::new(tx, ty), Size::new(pill_w as u32, 22))
+            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+            .draw(display)?;
+        Text::new(&clean, Point::new(tx + 6, ty + 16), detail).draw(display)?;
+        tx += pill_w + 6;
+    }
+
+    // 4. Left-Border Indented Summary Blockquote
+    Rectangle::new(Point::new(28, top + 108), Size::new(3, 82))
+        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+        .draw(display)?;
+    let sum_text = if meta.summary.is_empty() {
+        "Archive of Our Own reflowable EPUB work."
+    } else {
+        meta.summary.as_str()
+    };
+    let s_line1: String = sum_text.chars().take(44).collect();
+    let s_line2: String = sum_text.chars().skip(44).take(44).collect();
+    let s_line3: String = sum_text.chars().skip(88).take(44).collect();
+    Text::new(&s_line1, Point::new(40, top + 126), body).draw(display)?;
+    if !s_line2.is_empty() {
+        Text::new(&s_line2, Point::new(40, top + 152), body).draw(display)?;
+    }
+    if !s_line3.is_empty() {
+        Text::new(&truncate(&s_line3, 41), Point::new(40, top + 178), body).draw(display)?;
+    }
+
+    // 5. AO3 Stats Footer Bar
+    Rectangle::new(Point::new(24, top + 198), Size::new(432, 1))
+        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+        .draw(display)?;
+    let words = if meta.words.is_empty() {
+        format!("{} KB", book.size_bytes / 1024)
+    } else {
+        meta.words.clone()
+    };
+    let right_stat = page_info.unwrap_or("Format: EPUB");
+    Text::new(
+        &format!("Words: {words}   |   {right_stat}"),
+        Point::new(24, top + 220),
+        detail,
+    )
+    .draw(display)?;
+    Ok(())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LibraryStatus {
     left: &'static str,
@@ -176,6 +358,12 @@ fn library_status(tab: ReaderLibraryTab, entry_count: usize) -> LibraryStatus {
             left: "Bookmarks",
             middle: format!("{entry_count} saved"),
             right: "MARKS.TXT",
+        }
+    } else if tab == ReaderLibraryTab::Fanfic {
+        LibraryStatus {
+            left: "AO3 Works",
+            middle: format!("{entry_count} fics"),
+            right: "BOOKS/FANFIC",
         }
     } else {
         LibraryStatus {
@@ -332,6 +520,64 @@ pub fn render_page(
     let width = size.width as i32;
     let height = size.height as i32;
     let landscape = width > height;
+    let is_fanfic = session.book.path.contains("FANFIC");
+
+    // If opening Page 1 of a Fanfic in Portrait mode, render the AO3 Blurb Header above the prose!
+    if is_fanfic && !landscape && session.current_absolute_page() == 0 {
+        Rectangle::new(Point::new(0, 0), Size::new(size.width, 54))
+            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+            .draw(display)?;
+        Text::new(
+            "AO3 // ARCHIVE OF OUR OWN",
+            Point::new(18, 36),
+            state.display.header_title_style(),
+        )
+        .draw(display)?;
+
+        let mut enriched_book = session.book.clone();
+        if enriched_book.ao3.is_none() {
+            enriched_book.ao3 = session.epub_document.as_ref().map(|d| d.ao3.clone());
+        }
+        let pg_label = session.display_page_label();
+        draw_ao3_blurb_card(display, state, 62, &enriched_book, false, Some(&pg_label))?;
+
+        let body_style = reader_body_style(
+            state.reader.preferences.book_font,
+            state.reader.preferences.font_size,
+            state.reader.preferences.theme,
+        );
+        let text_bounds = TextBounds::new(24, 314, width - 24, height - 60);
+        if let Some(page) = session.current_cached_page() {
+            let line_step = i32::from(body_style.line_height()) + 2;
+            let first_baseline = text_bounds.top + i32::from(body_style.line_height());
+            for (index, line) in page.lines.iter().take(12).enumerate() {
+                let baseline = first_baseline + index as i32 * line_step;
+                if baseline >= text_bounds.bottom {
+                    break;
+                }
+                let (rendered, left) = aligned_reader_line(
+                    line.text.as_str(),
+                    line.paragraph_end,
+                    session.layout.paragraph_alignment,
+                    body_style,
+                    text_bounds,
+                );
+                Text::new(rendered.as_str(), Point::new(left, baseline), body_style)
+                    .draw_clipped(display, text_bounds)?;
+            }
+        }
+        Rectangle::new(Point::new(14, height - 54), Size::new((width - 28) as u32, 1))
+            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+            .draw(display)?;
+        Text::new(
+            "UP previous   DOWN next   SELECT options",
+            Point::new(18, height - 18),
+            state.display.body_style(),
+        )
+        .draw(display)?;
+        return Ok(());
+    }
+
     let header_height = if landscape { 52 } else { 70 };
     let status_top = header_height + 10;
     let status_height = if landscape { 34 } else { 42 };
@@ -358,7 +604,9 @@ pub fn render_page(
     )
     .draw(display)?;
     Text::new(
-        if session.book.format == BookFormat::Text {
+        if is_fanfic {
+            "AO3 // ARCHIVE OF OUR OWN"
+        } else if session.book.format == BookFormat::Text {
             "TXT READER"
         } else {
             "EPUB REFLOWABLE"
@@ -378,7 +626,9 @@ pub fn render_page(
     let marked = state.reader.current_page_is_bookmarked();
     if state.reader.preferences.show_progress {
         Text::new(
-            if session.book.format == BookFormat::Text {
+            if is_fanfic {
+                "AO3"
+            } else if session.book.format == BookFormat::Text {
                 session.encoding.label()
             } else {
                 "EPUB"
@@ -515,9 +765,6 @@ impl ReaderFrameBounds {
 }
 
 impl ReaderBodyGeometry {
-    /// Shared Reader body rectangle used by Classic and High Contrast. The
-    /// stronger High Contrast frame stays outside this viewport, so switching
-    /// themes never changes TXT pagination or cache fingerprints.
     #[must_use]
     const fn new(width: i32, status_top: i32, status_height: i32, footer_line: i32) -> Self {
         let text = TextBounds::new(
@@ -720,27 +967,31 @@ fn draw_tabs(
     state: &AppState,
     active: ReaderLibraryTab,
 ) -> Result<(), Infallible> {
-    let body = state.display.body_style();
+    let detail = state.display.detail_style();
     let tabs = [
         ReaderLibraryTab::Recent,
         ReaderLibraryTab::Books,
+        ReaderLibraryTab::Fanfic,
         ReaderLibraryTab::Files,
         ReaderLibraryTab::Bookmarks,
     ];
     for (index, tab) in tabs.iter().copied().enumerate() {
-        let left = 10 + index as i32 * 117;
+        let left = 10 + index as i32 * 93;
         if tab == active {
-            Rectangle::new(Point::new(left, 132), Size::new(112, 42))
+            Rectangle::new(Point::new(left, 132), Size::new(89, 40))
                 .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
                 .draw(display)?;
             Text::new(
                 tab.label(),
-                Point::new(left + 8, 161),
-                state.display.text_style(UiTextRole::Body, BinaryColor::Off),
+                Point::new(left + 8, 158),
+                state.display.text_style(UiTextRole::Detail, BinaryColor::Off),
             )
             .draw(display)?;
         } else {
-            Text::new(tab.label(), Point::new(left + 8, 161), body).draw(display)?;
+            Rectangle::new(Point::new(left, 132), Size::new(89, 40))
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                .draw(display)?;
+            Text::new(tab.label(), Point::new(left + 8, 158), detail).draw(display)?;
         }
     }
     Ok(())
