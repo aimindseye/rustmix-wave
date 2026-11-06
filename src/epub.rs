@@ -1100,3 +1100,160 @@ fn decode_entity(entity: &str) -> String {
         _ => "?".into(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::{
+        attribute, first_open_tag, html_to_text, open_epub, open_epub_on_worker,
+        read_epub_title_on_worker, EPUB_PARSER_WORKER_STACK_BYTES, EPUB_TITLE_WORKER_STACK_BYTES,
+    };
+
+    fn temp_epub(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("rustmix-{name}-{nonce}.epu"))
+    }
+
+    fn push_u16(output: &mut Vec<u8>, value: u16) {
+        output.extend(value.to_le_bytes());
+    }
+    fn push_u32(output: &mut Vec<u8>, value: u32) {
+        output.extend(value.to_le_bytes());
+    }
+
+    fn stored_zip(entries: &[(&str, &str)]) -> Vec<u8> {
+        let mut output = Vec::new();
+        let mut central = Vec::new();
+        for (name, body) in entries {
+            let offset = output.len() as u32;
+            push_u32(&mut output, 0x0403_4B50);
+            push_u16(&mut output, 20);
+            push_u16(&mut output, 0);
+            push_u16(&mut output, 0);
+            push_u16(&mut output, 0);
+            push_u16(&mut output, 0);
+            push_u32(&mut output, 0);
+            push_u32(&mut output, body.len() as u32);
+            push_u32(&mut output, body.len() as u32);
+            push_u16(&mut output, name.len() as u16);
+            push_u16(&mut output, 0);
+            output.extend(name.as_bytes());
+            output.extend(body.as_bytes());
+
+            push_u32(&mut central, 0x0201_4B50);
+            push_u16(&mut central, 20);
+            push_u16(&mut central, 20);
+            push_u16(&mut central, 0);
+            push_u16(&mut central, 0);
+            push_u16(&mut central, 0);
+            push_u16(&mut central, 0);
+            push_u32(&mut central, 0);
+            push_u32(&mut central, body.len() as u32);
+            push_u32(&mut central, body.len() as u32);
+            push_u16(&mut central, name.len() as u16);
+            push_u16(&mut central, 0);
+            push_u16(&mut central, 0);
+            push_u16(&mut central, 0);
+            push_u16(&mut central, 0);
+            push_u32(&mut central, 0);
+            push_u32(&mut central, offset);
+            central.extend(name.as_bytes());
+        }
+        let central_offset = output.len() as u32;
+        let central_size = central.len() as u32;
+        output.extend(central);
+        push_u32(&mut output, 0x0605_4B50);
+        push_u16(&mut output, 0);
+        push_u16(&mut output, 0);
+        push_u16(&mut output, entries.len() as u16);
+        push_u16(&mut output, entries.len() as u16);
+        push_u32(&mut output, central_size);
+        push_u32(&mut output, central_offset);
+        push_u16(&mut output, 0);
+        output
+    }
+
+    #[test]
+    fn xml_attribute_tokenizer_reads_attributes_after_element_name() {
+        let tag =
+            "rootfile full-path='OEBPS/book.opf' media-type=\"application/oebps-package+xml\"/";
+        assert_eq!(
+            attribute(tag, "full-path").as_deref(),
+            Some("OEBPS/book.opf")
+        );
+        assert_eq!(
+            attribute(tag, "media-type").as_deref(),
+            Some("application/oebps-package+xml")
+        );
+    }
+
+    #[test]
+    fn container_rootfile_lookup_ignores_plural_wrapper() {
+        let container =
+            "<container><rootfiles><rootfile full-path='OEBPS/book.opf'/></rootfiles></container>";
+        let rootfile =
+            first_open_tag(container, "rootfile").and_then(|tag| attribute(tag, "full-path"));
+        assert_eq!(rootfile.as_deref(), Some("OEBPS/book.opf"));
+    }
+
+    #[test]
+    fn parser_worker_stack_budget_is_explicit() {
+        assert_eq!(EPUB_PARSER_WORKER_STACK_BYTES, 64 * 1024);
+    }
+
+    #[test]
+    fn title_worker_uses_a_smaller_bounded_stack() {
+        assert_eq!(EPUB_TITLE_WORKER_STACK_BYTES, 32 * 1024);
+        assert!(EPUB_TITLE_WORKER_STACK_BYTES < EPUB_PARSER_WORKER_STACK_BYTES);
+    }
+
+    #[test]
+    fn flattens_xhtml_into_reflowable_paragraphs() {
+        assert_eq!(
+            html_to_text("<h1>Title</h1><p>Hello &amp; goodbye.</p>"),
+            "Title\n\nHello & goodbye."
+        );
+    }
+
+    #[test]
+    fn opens_stored_epub_manifest_spine_and_nav_toc() {
+        let path = temp_epub("stored");
+        let bytes = stored_zip(&[
+            ("META-INF/container.xml", "<container><rootfiles><rootfile full-path='OEBPS/book.opf'/></rootfiles></container>"),
+            ("OEBPS/book.opf", "<package><metadata><dc:title>Sample EPUB</dc:title></metadata><manifest><item id='nav' href='nav.xhtml' media-type='application/xhtml+xml' properties='nav'/><item id='c1' href='c1.xhtml' media-type='application/xhtml+xml'/><item id='c2' href='c2.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='c1'/><itemref idref='c2'/></spine></package>"),
+            ("OEBPS/nav.xhtml", "<nav><ol><li><a href='c1.xhtml'>Start</a></li><li><a href='c2.xhtml'>Second</a></li></ol></nav>"),
+            ("OEBPS/c1.xhtml", "<html><body><h1>Start</h1><p>First chapter.</p></body></html>"),
+            ("OEBPS/c2.xhtml", "<html><body><h1>Second</h1><p>Second chapter.</p></body></html>"),
+        ]);
+        fs::write(&path, bytes).unwrap();
+        let epub = open_epub(&path).unwrap();
+        let worker_epub = open_epub_on_worker(&path).unwrap();
+        assert_eq!(worker_epub, epub);
+        assert_eq!(epub.title, "Sample EPUB");
+        assert_eq!(epub.spine_count, 2);
+        assert_eq!(epub.chapters.len(), 2);
+        assert_eq!(epub.chapters[0].number, 1);
+        assert_eq!(epub.chapters[1].number, 2);
+        assert_eq!(
+            epub.chapter_for_offset(epub.chapters[1].text_offset)
+                .unwrap()
+                .number,
+            2
+        );
+        assert_eq!(read_epub_title_on_worker(&path).unwrap(), "Sample EPUB");
+        assert!(epub.text.contains("First chapter."));
+        assert!(epub.text.contains("Second chapter."));
+        assert_eq!(epub.toc.len(), 2);
+        assert_eq!(epub.toc[0].label, "Start");
+        assert!(epub.toc[1].text_offset > epub.toc[0].text_offset);
+        let _ = fs::remove_file(path);
+    }
+}
