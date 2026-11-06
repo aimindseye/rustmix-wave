@@ -1,4 +1,4 @@
-//! Offline Reader state, TXT / EPUB pagination and Reader-owned persistence.
+//! Offline Reader state, TXT / EPUB pagination, AO3 fanfic scrolling and Reader-owned persistence.
 //!
 //! v0.17.1 adds chapter-aware EPUB page labels, persistent chapter-aware EPUB
 //! bookmark labels and OPF-title Library rows while preserving the accepted TXT
@@ -20,10 +20,9 @@ use crate::{
     },
 };
 
-
 /// SD-card library owned by the Reader subsystem.
 pub const READER_BOOKS_DIRECTORY: &str = "/sdcard/RUSTMIX/BOOKS";
-/// SD-card library owned by ? girl the fanfic.
+/// SD-card fanfiction library owned by the Reader subsystem.
 pub const READER_FANFIC_DIRECTORY: &str = "/sdcard/RUSTMIX/BOOKS/FANFIC";
 /// SD-card state directory owned by the Reader subsystem.
 pub const READER_STATE_DIRECTORY: &str = "/sdcard/RUSTMIX/READER";
@@ -69,12 +68,39 @@ pub const READER_EPUB_PAGE_ANCHOR_LIMIT: usize = 4096;
 pub const READER_EPUB_INDEX_YIELD_EVERY_PAGES: usize = 4;
 /// Cooperative pause used during bounded EPUB chapter pagination.
 pub const READER_EPUB_INDEX_YIELD_MILLIS: u64 = 1;
+/// Number of virtual lines scrolled per UP/DOWN button press in Fanfic mode.
+pub const FANFIC_SCROLL_STEP: usize = 5;
+/// Approximate number of virtual lines visible in the portrait Fanfic viewport.
+pub const FANFIC_VIEWPORT_LINES: usize = 22;
 
 const READER_PERSISTENCE_VERSION: &str = "1";
 const READER_CACHE_VERSION: &str = "3";
 const READER_PREFS_VERSION: &str = "1";
 const CACHE_FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const CACHE_FNV_PRIME: u64 = 0x100000001b3;
+
+/// One styled virtual line in the continuous AO3 Fanfic scroll stream.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Ao3ScrollLine {
+    TopBanner,
+    NavBar,
+    ActionButtons,
+    MetaBoxTop,
+    MetaLabel(String, bool),
+    MetaValue(String, bool),
+    MetaStats(String),
+    MetaBoxBottom,
+    Blank,
+    WorkTitle(String),
+    WorkAuthor(String),
+    SectionHeader(String),
+    IndentedProse(String),
+    ChapterHeading(String),
+    BodyProse {
+        text: String,
+        paragraph_end: bool,
+    },
+}
 
 /// Reader-supported content types. TXT and bounded reflowable EPUB are active.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -178,7 +204,7 @@ impl ReaderLocation {
     }
 }
 
-/// One list row rendered by Recent, Books, Files or Bookmarks.
+/// One list row rendered by Recent, Books, Fanfic, Files or Bookmarks.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReaderLibraryEntry {
     pub book: ReaderBook,
@@ -396,9 +422,7 @@ impl BookFontSize {
     }
 }
 
-/// Reader-specific body font family. Reader-only generated bitmap strikes are
-/// printable-ASCII subsets; raw font files are not distributed. Persisted
-/// `serif` and `atkinson-hyperlegible` keys remain stable for compatibility.
+/// Reader-specific body font family.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum BookFont {
     Inter,
@@ -562,10 +586,6 @@ impl Default for ReaderPreferences {
 impl ReaderPreferences {
     #[must_use]
     pub const fn layout(self) -> ReaderLayout {
-        // Reader pages share one bounded body viewport across Classic and
-        // High Contrast. Serif and Literata use proportional glyphs, so their
-        // conservative character budgets are slightly smaller than the UI-family strikes.
-        // A final pixel clip in the renderer guards unusually wide lines.
         let (chars_per_line, lines_per_page) =
             match (self.orientation, self.font_size, self.book_font) {
                 (
@@ -679,9 +699,7 @@ impl ReaderPreferences {
     }
 }
 
-/// Coarse stages used by the e-paper loading screen. The runtime advances only
-/// at meaningful boundaries so progress remains visible without excessive
-/// refreshes.
+/// Coarse stages used by the e-paper loading screen.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReaderLoadingStage {
     OpeningFile,
@@ -746,8 +764,7 @@ pub struct PendingReaderOpen {
     pub message: String,
 }
 
-/// One wrapped Reader line. `paragraph_end` prevents Justified rendering from
-/// stretching the final line of a paragraph.
+/// One wrapped Reader line.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReaderPageLine {
     pub text: String,
@@ -757,15 +774,13 @@ pub struct ReaderPageLine {
 /// One cached portrait page and its byte anchor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReaderCachedPage {
-    /// Absolute book-page index, independent of a cache-recovery base offset.
     pub page_index: usize,
     pub byte_offset: u64,
     pub next_byte_offset: u64,
     pub lines: Vec<ReaderPageLine>,
 }
 
-/// SD-backed page-anchor cache. The cache is intentionally text-based and
-/// bounded so corrupt records can be rejected without blocking book opening.
+/// SD-backed page-anchor cache.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ReaderAnchorCache {
     fingerprint: u64,
@@ -775,9 +790,7 @@ struct ReaderAnchorCache {
     complete: bool,
 }
 
-/// One EPUB chapter's layout-specific page anchors. EPUB anchors are rebuilt in
-/// RAM whenever a book opens or Reader layout changes; TXT cache behavior remains
-/// unchanged.
+/// One EPUB chapter's layout-specific page anchors.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReaderEpubChapterPages {
     pub chapter_number: usize,
@@ -786,24 +799,23 @@ pub struct ReaderEpubChapterPages {
     pub page_offsets: Vec<u64>,
 }
 
-/// Active Reader session. Generated page anchors and nearby rendered pages remain
-/// bounded in RAM and are rebuilt lazily when the reader advances.
+/// Active Reader session.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReaderSession {
     pub book: ReaderBook,
     pub encoding: TextEncoding,
     pub epub_document: Option<EpubDocument>,
     pub layout: ReaderLayout,
-    /// Local index within page_offsets.
     pub current_page: usize,
-    /// Absolute page index represented by page_offsets[0]. Normally zero. A
-    /// non-zero value is allowed when STATE.TXT survives but a cache is absent.
     pub page_number_base: usize,
     pub page_offsets: Vec<u64>,
     pub indexed_through: u64,
     pub index_complete: bool,
     pub cache: Vec<ReaderCachedPage>,
     pub epub_chapter_pages: Vec<ReaderEpubChapterPages>,
+    pub is_fanfic: bool,
+    pub scroll_line: usize,
+    pub ao3_scroll_lines: Vec<Ao3ScrollLine>,
 }
 
 impl ReaderSession {
@@ -879,8 +891,6 @@ impl ReaderSession {
         }
     }
 
-    /// Product-facing page label. TXT keeps the accepted book-relative label;
-    /// EPUB uses a chapter-relative label as requested by the Reader UI.
     #[must_use]
     pub fn display_page_label(&self) -> String {
         self.current_epub_chapter_page_label().map_or_else(
@@ -1042,8 +1052,7 @@ impl ReaderSession {
     }
 }
 
-/// Reader Options action rows. Editable values live on the separate
-/// Reading Preferences editor so menu controls match the rest of the firmware.
+/// Reader Options action rows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReaderOption {
     Bookmark,
@@ -1092,8 +1101,7 @@ impl ReaderOption {
     }
 }
 
-/// Reading Preferences editor rows. UP/DOWN changes the active value and
-/// SELECT advances to the next row, matching the firmware editor convention.
+/// Reading Preferences editor rows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReadingPreference {
     ReadingTheme,
@@ -1127,8 +1135,7 @@ impl ReadingPreference {
     }
 }
 
-/// Coarse background tick result used by main.rs to refresh only meaningful
-/// loading-screen transitions.
+/// Coarse background tick result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReaderTickOutcome {
     None,
@@ -1164,7 +1171,6 @@ pub struct ReaderUiState {
     pub library_error: Option<String>,
     pub persistence_warning: Option<String>,
     pub library_tab: ReaderLibraryTab,
-    /// Row zero is the explicit tab-control row; book rows begin at one.
     pub library_selected: usize,
     pub bookmarks_selected: usize,
     pub toc_selected: usize,
@@ -1228,8 +1234,6 @@ impl ReaderUiState {
         }
     }
 
-    /// Load persisted state without making startup dependent on removable
-    /// storage. Corrupt records are ignored and reported as a warning.
     pub fn load_persistent_state(&mut self) -> ReaderPersistenceReport {
         let mut warnings = Vec::new();
         let preferences_loaded = match load_preferences(&self.preferences_path()) {
@@ -1348,7 +1352,7 @@ impl ReaderUiState {
                     location: self.saved_position_for_book(&book),
                     book,
                 })
-                .collect(),      
+                .collect(),
             ReaderLibraryTab::Bookmarks => self
                 .bookmarks
                 .iter()
@@ -1358,7 +1362,6 @@ impl ReaderUiState {
                     location: Some(location),
                 })
                 .collect(),
-            
         }
     }
 
@@ -1451,10 +1454,6 @@ impl ReaderUiState {
         });
     }
 
-    /// Persist and drop the previous session before a new book is parsed. EPUB
-    /// documents retain flattened text and chapter anchors in RAM; keeping the
-    /// old document alive while allocating the next parser-worker stack can
-    /// exhaust the embedded heap after repeated book switches.
     fn release_active_session_for_open(&mut self) {
         if self.session.is_none() {
             return;
@@ -1649,6 +1648,13 @@ impl ReaderUiState {
 
     pub fn previous_page(&mut self) {
         if let Some(session) = self.session.as_mut() {
+            if session.is_fanfic {
+                session.scroll_line = session.scroll_line.saturating_sub(FANFIC_SCROLL_STEP);
+                session.current_page =
+                    (session.scroll_line / FANFIC_VIEWPORT_LINES).min(session.page_offsets.len().saturating_sub(1));
+                self.persist_current_session_best_effort();
+                return;
+            }
             if let Err(error) = session.previous_page() {
                 self.last_message = Some(error);
                 return;
@@ -1659,6 +1665,17 @@ impl ReaderUiState {
 
     pub fn next_page(&mut self) {
         if let Some(session) = self.session.as_mut() {
+            if session.is_fanfic {
+                let max_scroll = session
+                    .ao3_scroll_lines
+                    .len()
+                    .saturating_sub(FANFIC_VIEWPORT_LINES);
+                session.scroll_line = (session.scroll_line + FANFIC_SCROLL_STEP).min(max_scroll);
+                session.current_page =
+                    (session.scroll_line / FANFIC_VIEWPORT_LINES).min(session.page_offsets.len().saturating_sub(1));
+                self.persist_current_session_best_effort();
+                return;
+            }
             if let Err(error) = session.next_page() {
                 self.last_message = Some(error);
                 return;
@@ -1683,9 +1700,6 @@ impl ReaderUiState {
         ReaderOption::ALL[self.options_selected]
     }
 
-    /// Resolve a bookmark's user-facing page label against the active layout
-    /// when nearby anchors are available. The persisted byte offset remains the
-    /// canonical bookmark authority; the stored page index is a safe fallback.
     #[must_use]
     pub fn bookmark_display_page(&self, bookmark: &ReaderLocation) -> usize {
         self.session
@@ -1708,8 +1722,6 @@ impl ReaderUiState {
             .unwrap_or_else(|| bookmark.page_index.saturating_add(1))
     }
 
-    /// Resolve an EPUB bookmark against the active layout when possible and
-    /// otherwise use the persisted chapter-relative fallback stored in MARKS.TXT.
     #[must_use]
     pub fn bookmark_display_chapter_page(
         &self,
@@ -1853,9 +1865,6 @@ impl ReaderUiState {
         ReadingPreference::ALL[self.preferences_selected]
     }
 
-    /// Apply one Settings-style SELECT action to the highlighted preference.
-    /// Redraw-only settings persist immediately in place. Layout-sensitive
-    /// settings persist immediately and request a staged current-page rebuild.
     #[must_use]
     pub fn activate_selected_preference(&mut self) -> bool {
         let layout_sensitive = match self.selected_preference() {
@@ -1918,8 +1927,6 @@ impl ReaderUiState {
         }
     }
 
-    /// Finish the Settings-style editor. SELECT already persists changes and
-    /// launches any required staged rebuild, so BOOT simply returns to options.
     pub fn finish_preferences_edit(&mut self) -> bool {
         self.preferences_layout_dirty = false;
         false
@@ -2108,6 +2115,26 @@ impl ReaderUiState {
         let page = read_txt_page(book, encoding, layout, offset, absolute_page)?;
         let indexed_through = indexed_through.max(page.next_byte_offset);
         let index_complete = index_complete || indexed_through >= book.size_bytes;
+
+        let is_fanfic = book.path.contains("FANFIC") || book.ao3.is_some();
+        let ao3_scroll_lines = if is_fanfic {
+            let raw = fs::read_to_string(&book.path).unwrap_or_default();
+            let decoded = decode_with_offsets(raw.as_bytes(), encoding, 0);
+            let normalized = normalize_decoded(&decoded);
+            let mut full_layout = layout;
+            full_layout.lines_per_page = usize::MAX / 2;
+            let (all_lines, _) = paginate_decoded(&normalized, full_layout);
+            let meta = book.ao3.clone().unwrap_or_default();
+            build_ao3_scroll_stream(&book.title, &meta, &all_lines)
+        } else {
+            Vec::new()
+        };
+        let scroll_line = if is_fanfic {
+            current_page * FANFIC_VIEWPORT_LINES
+        } else {
+            0
+        };
+
         Ok(ReaderSession {
             book: book.clone(),
             encoding,
@@ -2120,6 +2147,9 @@ impl ReaderUiState {
             index_complete,
             cache: vec![page],
             epub_chapter_pages: Vec::new(),
+            is_fanfic,
+            scroll_line,
+            ao3_scroll_lines,
         })
     }
 
@@ -2152,6 +2182,25 @@ impl ReaderUiState {
         if !document.title.trim().is_empty() {
             session_book.title = document.title.clone();
         }
+        session_book.ao3 = Some(document.ao3.clone());
+
+        let is_fanfic = session_book.path.contains("FANFIC") || book.ao3.is_some();
+        let ao3_scroll_lines = if is_fanfic {
+            let decoded = decode_with_offsets(document.text.as_bytes(), TextEncoding::Utf8, 0);
+            let normalized = normalize_decoded(&decoded);
+            let mut full_layout = layout;
+            full_layout.lines_per_page = usize::MAX / 2;
+            let (all_lines, _) = paginate_decoded(&normalized, full_layout);
+            build_ao3_scroll_stream(&session_book.title, &document.ao3, &all_lines)
+        } else {
+            Vec::new()
+        };
+        let scroll_line = if is_fanfic {
+            current_page * FANFIC_VIEWPORT_LINES
+        } else {
+            0
+        };
+
         Ok(ReaderSession {
             book: session_book,
             encoding: TextEncoding::Utf8,
@@ -2164,6 +2213,9 @@ impl ReaderUiState {
             index_complete: true,
             cache: vec![page],
             epub_chapter_pages,
+            is_fanfic,
+            scroll_line,
+            ao3_scroll_lines,
         })
     }
 
@@ -2260,8 +2312,100 @@ impl ReaderUiState {
     }
 }
 
-/// Scan one bounded Reader library. TXT and EPUB/EPU rows open through the
-/// shared staged Reader architecture.
+fn build_ao3_scroll_stream(
+    title: &str,
+    meta: &EpubAo3Meta,
+    pages_lines: &[ReaderPageLine],
+) -> Vec<Ao3ScrollLine> {
+    use Ao3ScrollLine::*;
+    let mut s = Vec::new();
+
+    s.push(TopBanner);
+    s.push(NavBar);
+    s.push(ActionButtons);
+    s.push(MetaBoxTop);
+
+    let fields = [
+        ("Rating:", meta.rating_text.as_str(), false),
+        ("Archive Warning:", meta.warning_text.as_str(), true),
+        ("Category:", meta.category_text.as_str(), false),
+        ("Fandom:", meta.fandoms.as_str(), false),
+        ("Relationships:", meta.relationships.as_str(), false),
+        ("Characters:", meta.characters.as_str(), false),
+        ("Additional Tags:", meta.additional_tags.as_str(), false),
+        ("Language:", meta.language.as_str(), false),
+    ];
+    for (label, val, bold) in fields {
+        s.push(MetaLabel(label.into(), bold));
+        for wrapped in wrap_plain_str(val, 38) {
+            s.push(MetaValue(wrapped, bold));
+        }
+    }
+    s.push(MetaLabel("Stats:".into(), false));
+    s.push(MetaStats(format!(
+        "Published: {}  Words: {}  Chapters: {}",
+        meta.published, meta.words, meta.chapters
+    )));
+    s.push(MetaBoxBottom);
+    s.push(Blank);
+
+    for t_line in wrap_plain_str(title, 22) {
+        s.push(WorkTitle(t_line));
+    }
+    s.push(WorkAuthor(meta.author.clone()));
+    s.push(Blank);
+
+    if !meta.summary.is_empty() {
+        s.push(SectionHeader("Summary:".into()));
+        for line in wrap_plain_str(&meta.summary, 38) {
+            s.push(IndentedProse(line));
+        }
+        s.push(Blank);
+    }
+
+    if !meta.notes.is_empty() {
+        s.push(SectionHeader("Notes:".into()));
+        for line in wrap_plain_str(&meta.notes, 38) {
+            s.push(IndentedProse(line));
+        }
+        s.push(Blank);
+    }
+
+    s.push(ChapterHeading("Chapter 1".into()));
+    s.push(Blank);
+    for line in pages_lines {
+        s.push(BodyProse {
+            text: line.text.clone(),
+            paragraph_end: line.paragraph_end,
+        });
+    }
+    s
+}
+
+fn wrap_plain_str(input: &str, max_chars: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    for word in input.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current.chars().count() + 1 + word.chars().count() <= max_chars {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            out.push(current);
+            current = word.to_string();
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    if out.is_empty() {
+        out.push("-".into());
+    }
+    out
+}
+
+/// Scan one bounded Reader library.
 pub fn scan_txt_library(root: impl AsRef<Path>) -> Result<Vec<ReaderBook>, String> {
     let root = root.as_ref();
     let mut books = Vec::new();
@@ -2310,7 +2454,7 @@ pub fn scan_txt_library(root: impl AsRef<Path>) -> Result<Vec<ReaderBook>, Strin
     Ok(books)
 }
 
-/// add scan_fanfic_library
+/// Scan the `/RUSTMIX/BOOKS/FANFIC` subfolder and enrich EPUB entries with AO3 OPF metadata.
 pub fn scan_fanfic_library(root: impl AsRef<Path>) -> Result<Vec<ReaderBook>, String> {
     let mut works = scan_txt_library(root)?;
     for book in &mut works {
@@ -2551,11 +2695,6 @@ fn normalize_decoded(decoded: &[(char, u64)]) -> Vec<(char, u64)> {
                 previous.is_some_and(is_word_character) && next.is_some_and(is_word_character);
             let repeated_separator = previous == Some('_') || next == Some('_');
 
-            // Project Gutenberg TXT files often wrap emphasis across multiple
-            // source lines: `_first line ... last line_`. Remove each bounded
-            // delimiter independently so closing markers after punctuation do
-            // not leak into rendered pages. Keep filename-style word_internal
-            // underscores and repeated separator rows intact.
             if !word_internal && !repeated_separator {
                 continue;
             }
@@ -3018,9 +3157,6 @@ fn is_fat83_safe_file_name(path: &Path) -> bool {
             .all(|value| value.is_ascii_alphanumeric() || value == b'_')
 }
 
-/// Power-safe bounded text replacement for Reader-owned state. The previous
-/// primary is retained as .BAK until the new .TMP file has been renamed into
-/// place. Readers accept the backup if startup observes an interrupted write.
 fn atomic_replace_text(path: &Path, text: &str) -> Result<(), String> {
     let parent = path
         .parent()
