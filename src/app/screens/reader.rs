@@ -1,4 +1,4 @@
-//! Reader landing, library, AO3 fanfic blurb cards, bookmarks, loading, TXT / EPUB page, TOC and options screens.
+//! Reader landing, library, AO3 blurb cards, bookmarks, loading, TXT / EPUB page, TOC and options screens.
 
 use core::convert::Infallible;
 
@@ -22,8 +22,8 @@ use crate::{
     epub::EpubAo3Meta,
     orientation::OrientedFrameBuffer,
     reader::{
-        BookFormat, ParagraphAlignment, ReaderBook, ReaderLibraryTab, ReaderLoadingStage,
-        ReaderOption, ReadingPreference, ReadingTheme,
+        Ao3ScrollLine, BookFormat, ParagraphAlignment, ReaderBook, ReaderLibraryTab,
+        ReaderLoadingStage, ReaderOption, ReadingPreference, ReadingTheme, FANFIC_VIEWPORT_LINES,
     },
 };
 
@@ -137,7 +137,7 @@ pub fn render_library(
             .as_deref()
             .unwrap_or(match reader.library_tab {
                 ReaderLibraryTab::Recent => "No recent books yet.",
-                ReaderLibraryTab::Fanfic => "Put 8.3 .EPU/.TXT fics in /RUSTMIX/BOOKS/FANFIC.",
+                ReaderLibraryTab::Fanfic => "Put .EPU/.TXT works in /RUSTMIX/BOOKS/FANFIC.",
                 ReaderLibraryTab::Bookmarks => "No saved bookmarks yet.",
                 _ => "Copy TXT or EPUB books into /RUSTMIX/BOOKS.",
             });
@@ -149,9 +149,6 @@ pub fn render_library(
         );
     }
 
-    // ========================================================================
-    // 1-BIT AO3 VISUAL DESIGN IN FANFIC TAB (2 Blurb Cards per Page)
-    // ========================================================================
     if reader.library_tab == ReaderLibraryTab::Fanfic {
         let active_idx = reader.library_selected.saturating_sub(1);
         let page_start = (active_idx / 2) * 2;
@@ -202,7 +199,6 @@ pub fn render_library(
     )
 }
 
-/// Draws the 1-Bit AO3 2x2 Symbol Grid + Title/Author + Pill Tags + Blockquote Summary + Stats
 fn draw_ao3_blurb_card(
     display: &mut OrientedFrameBuffer<'_>,
     state: &AppState,
@@ -213,11 +209,11 @@ fn draw_ao3_blurb_card(
 ) -> Result<(), Infallible> {
     let default_meta = EpubAo3Meta::default();
     let meta = book.ao3.as_ref().unwrap_or(&default_meta);
-    let heading = state.display.heading_style();
-    let body = state.display.body_style();
+    let theme = state.reader.preferences.theme;
+    let georgia_md = reader_body_style(crate::reader::BookFont::Serif, crate::reader::BookFontSize::Medium, theme);
+    let lucida_body = reader_body_style(crate::reader::BookFont::Inter, crate::reader::BookFontSize::Small, theme);
     let detail = state.display.detail_style();
 
-    // Outer AO3 Blurb Frame (Double border when highlighted)
     Rectangle::new(Point::new(14, top), Size::new(452, 236))
         .into_styled(PrimitiveStyle::with_stroke(
             BinaryColor::On,
@@ -225,14 +221,13 @@ fn draw_ao3_blurb_card(
         ))
         .draw(display)?;
 
-    // 1. 2x2 AO3 Symbol Grid (Top-Left: Rating, Top-Right: Category, Bot-Left: Warning, Bot-Right: Status)
     let gx = 24;
     let gy = top + 12;
     for (dx, dy, sym, invert) in [
-        (0, 0, meta.rating, selected),
-        (24, 0, meta.category, false),
-        (0, 24, meta.warning, false),
-        (24, 24, meta.status, false),
+        (0, 0, meta.rating_text.chars().next().unwrap_or('T'), selected),
+        (24, 0, meta.category_text.chars().next().unwrap_or('/'), false),
+        (0, 24, meta.warning_text.chars().next().unwrap_or('!'), false),
+        (24, 24, '=', false),
     ] {
         let cell_pt = Point::new(gx + dx, gy + dy);
         if invert {
@@ -249,78 +244,62 @@ fn draw_ao3_blurb_card(
             Rectangle::new(cell_pt, Size::new(22, 22))
                 .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
                 .draw(display)?;
-            Text::new(
-                &sym.to_string(),
-                Point::new(gx + dx + 6, gy + dy + 16),
-                detail,
-            )
-            .draw(display)?;
+            Text::new(&sym.to_string(), Point::new(gx + dx + 6, gy + dy + 16), detail).draw(display)?;
         }
     }
 
-    // 2. Title, Author & Fandom next to the 2x2 Grid
     let prefix = if selected { "> " } else { "" };
     Text::new(
         &truncate(&format!("{prefix}{}", book.title), 26),
         Point::new(80, top + 28),
-        heading,
+        georgia_md,
     )
     .draw(display)?;
     Text::new(
         &truncate(&format!("by {}", meta.author), 34),
         Point::new(80, top + 48),
-        body,
+        lucida_body,
     )
     .draw(display)?;
-    Text::new(
-        &truncate(&meta.fandom, 38),
-        Point::new(80, top + 64),
-        detail,
-    )
-    .draw(display)?;
+    Text::new(&truncate(&meta.fandoms, 38), Point::new(80, top + 64), detail).draw(display)?;
 
-    // Divider line
     Rectangle::new(Point::new(24, top + 72), Size::new(432, 1))
         .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
         .draw(display)?;
 
-    // 3. Pill-Box Tags (`[Ship/Pairing] [Tag]`)
     let mut tx = 24;
     let ty = top + 78;
-    for tag in meta.tags.iter().take(3) {
-        let clean = truncate(tag, 16);
-        let pill_w = (clean.len() as i32 * 8 + 14).min(140);
+    for tag in meta.additional_tags.split(',') {
+        let clean = tag.trim().to_string();
+        if clean.is_empty() {
+            continue;
+        }
+        let pill_w = (clean.len() as i32 * 7 + 12).min(140);
         if tx + pill_w > 454 {
             break;
         }
         Rectangle::new(Point::new(tx, ty), Size::new(pill_w as u32, 22))
             .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
             .draw(display)?;
-        Text::new(&clean, Point::new(tx + 6, ty + 16), detail).draw(display)?;
+        Text::new(&truncate(&clean, 16), Point::new(tx + 6, ty + 16), detail).draw(display)?;
         tx += pill_w + 6;
     }
 
-    // 4. Left-Border Indented Summary Blockquote
     Rectangle::new(Point::new(28, top + 108), Size::new(3, 82))
         .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
         .draw(display)?;
     let sum_text = if meta.summary.is_empty() {
-        "Archive of Our Own reflowable EPUB work."
+        "Archive of Our Own reflowable work."
     } else {
         meta.summary.as_str()
     };
     let s_line1: String = sum_text.chars().take(44).collect();
     let s_line2: String = sum_text.chars().skip(44).take(44).collect();
-    let s_line3: String = sum_text.chars().skip(88).take(44).collect();
-    Text::new(&s_line1, Point::new(40, top + 126), body).draw(display)?;
+    Text::new(&s_line1, Point::new(40, top + 126), lucida_body).draw(display)?;
     if !s_line2.is_empty() {
-        Text::new(&s_line2, Point::new(40, top + 152), body).draw(display)?;
-    }
-    if !s_line3.is_empty() {
-        Text::new(&truncate(&s_line3, 41), Point::new(40, top + 178), body).draw(display)?;
+        Text::new(&s_line2, Point::new(40, top + 152), lucida_body).draw(display)?;
     }
 
-    // 5. AO3 Stats Footer Bar
     Rectangle::new(Point::new(24, top + 198), Size::new(432, 1))
         .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
         .draw(display)?;
@@ -336,6 +315,23 @@ fn draw_ao3_blurb_card(
         detail,
     )
     .draw(display)?;
+    Ok(())
+}
+
+fn draw_dotted_underline(
+    display: &mut OrientedFrameBuffer<'_>,
+    x: i32,
+    y: i32,
+    width: i32,
+) -> Result<(), Infallible> {
+    let mut cx = x;
+    let end = (x + width).min(452);
+    while cx < end {
+        Rectangle::new(Point::new(cx, y), Size::new(2, 1))
+            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+            .draw(display)?;
+        cx += 4;
+    }
     Ok(())
 }
 
@@ -487,8 +483,8 @@ pub fn render_loading(
     draw_header(
         display,
         state.display,
-        "OPENING BOOK",
-        "RESPONSIVE FIRST-PAGE-FIRST CACHE",
+        "OPENING WORK",
+        "RESPONSIVE CACHE",
     )?;
     let body = state.display.body_style();
     let heading = state.display.heading_style();
@@ -500,12 +496,6 @@ pub fn render_loading(
     draw_progress(display, stage.progress())?;
     let message = loading.map_or("Preparing reader...", |value| value.message.as_str());
     Text::new(&truncate(message, 52), Point::new(24, 356), body).draw(display)?;
-    Text::new(
-        "The current page opens before full indexing.",
-        Point::new(24, 410),
-        body,
-    )
-    .draw(display)?;
     draw_footer(display, state.display, "HOLD BOOT CANCEL")
 }
 
@@ -516,68 +506,14 @@ pub fn render_page(
     let Some(session) = state.reader.session.as_ref() else {
         return render_continue_reading(display, state);
     };
+    if session.is_fanfic {
+        return render_ao3_continuous_scroll_page(display, state, session);
+    }
+
     let size = display.orientation().logical_size();
     let width = size.width as i32;
     let height = size.height as i32;
     let landscape = width > height;
-    let is_fanfic = session.book.path.contains("FANFIC");
-
-    // If opening Page 1 of a Fanfic in Portrait mode, render the AO3 Blurb Header above the prose!
-    if is_fanfic && !landscape && session.current_absolute_page() == 0 {
-        Rectangle::new(Point::new(0, 0), Size::new(size.width, 54))
-            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-            .draw(display)?;
-        Text::new(
-            "AO3 // ARCHIVE OF OUR OWN",
-            Point::new(18, 36),
-            state.display.header_title_style(),
-        )
-        .draw(display)?;
-
-        let mut enriched_book = session.book.clone();
-        if enriched_book.ao3.is_none() {
-            enriched_book.ao3 = session.epub_document.as_ref().map(|d| d.ao3.clone());
-        }
-        let pg_label = session.display_page_label();
-        draw_ao3_blurb_card(display, state, 62, &enriched_book, false, Some(&pg_label))?;
-
-        let body_style = reader_body_style(
-            state.reader.preferences.book_font,
-            state.reader.preferences.font_size,
-            state.reader.preferences.theme,
-        );
-        let text_bounds = TextBounds::new(24, 314, width - 24, height - 60);
-        if let Some(page) = session.current_cached_page() {
-            let line_step = i32::from(body_style.line_height()) + 2;
-            let first_baseline = text_bounds.top + i32::from(body_style.line_height());
-            for (index, line) in page.lines.iter().take(12).enumerate() {
-                let baseline = first_baseline + index as i32 * line_step;
-                if baseline >= text_bounds.bottom {
-                    break;
-                }
-                let (rendered, left) = aligned_reader_line(
-                    line.text.as_str(),
-                    line.paragraph_end,
-                    session.layout.paragraph_alignment,
-                    body_style,
-                    text_bounds,
-                );
-                Text::new(rendered.as_str(), Point::new(left, baseline), body_style)
-                    .draw_clipped(display, text_bounds)?;
-            }
-        }
-        Rectangle::new(Point::new(14, height - 54), Size::new((width - 28) as u32, 1))
-            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-            .draw(display)?;
-        Text::new(
-            "UP previous   DOWN next   SELECT options",
-            Point::new(18, height - 18),
-            state.display.body_style(),
-        )
-        .draw(display)?;
-        return Ok(());
-    }
-
     let header_height = if landscape { 52 } else { 70 };
     let status_top = header_height + 10;
     let status_height = if landscape { 34 } else { 42 };
@@ -604,9 +540,7 @@ pub fn render_page(
     )
     .draw(display)?;
     Text::new(
-        if is_fanfic {
-            "AO3 // ARCHIVE OF OUR OWN"
-        } else if session.book.format == BookFormat::Text {
+        if session.book.format == BookFormat::Text {
             "TXT READER"
         } else {
             "EPUB REFLOWABLE"
@@ -626,9 +560,7 @@ pub fn render_page(
     let marked = state.reader.current_page_is_bookmarked();
     if state.reader.preferences.show_progress {
         Text::new(
-            if is_fanfic {
-                "AO3"
-            } else if session.book.format == BookFormat::Text {
+            if session.book.format == BookFormat::Text {
                 session.encoding.label()
             } else {
                 "EPUB"
@@ -733,6 +665,191 @@ pub fn render_page(
         },
         Point::new(18, height - 18),
         if landscape { ui_detail } else { ui_body },
+    )
+    .draw(display)?;
+    Ok(())
+}
+
+fn render_ao3_continuous_scroll_page(
+    display: &mut OrientedFrameBuffer<'_>,
+    state: &AppState,
+    session: &crate::reader::ReaderSession,
+) -> Result<(), Infallible> {
+    let theme = state.reader.preferences.theme;
+    let georgia_xl = reader_body_style(crate::reader::BookFont::Serif, crate::reader::BookFontSize::XLarge, theme);
+    let georgia_lg = reader_body_style(crate::reader::BookFont::Serif, crate::reader::BookFontSize::Large, theme);
+    let georgia_md = reader_body_style(crate::reader::BookFont::Serif, crate::reader::BookFontSize::Medium, theme);
+
+    let lucida_body = reader_body_style(
+        crate::reader::BookFont::Inter,
+        state.reader.preferences.font_size,
+        theme,
+    );
+    let lucida_sm = reader_body_style(crate::reader::BookFont::Inter, crate::reader::BookFontSize::Small, theme);
+    let detail = state.display.detail_style();
+    let inv_detail = state.display.text_style(UiTextRole::Detail, BinaryColor::Off);
+
+    let total_lines = session.ao3_scroll_lines.len().max(1);
+    let start = session.scroll_line.min(total_lines.saturating_sub(1));
+    let mut y: i32 = 18;
+    let bottom_limit: i32 = 744;
+
+    for line in session.ao3_scroll_lines.iter().skip(start) {
+        if y >= bottom_limit {
+            break;
+        }
+        match line {
+            Ao3ScrollLine::TopBanner => {
+                Text::new("AO3", Point::new(16, y + 10), state.display.heading_style()).draw(display)?;
+                Text::new("Archive of Our Own", Point::new(62, y + 10), georgia_lg).draw(display)?;
+                Text::new("beta", Point::new(310, y + 2), detail).draw(display)?;
+                y += 26;
+            }
+            Ao3ScrollLine::NavBar => {
+                Rectangle::new(Point::new(0, y - 6), Size::new(480, 26))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                Text::new(
+                    "Fandoms    Browse    Search    About",
+                    Point::new(16, y + 12),
+                    inv_detail,
+                )
+                .draw(display)?;
+                y += 28;
+            }
+            Ao3ScrollLine::ActionButtons => {
+                for (bx, bw, lbl) in [
+                    (16, 88, "Comments"),
+                    (110, 160, "Hide Creator's Style"),
+                    (276, 62, "Share"),
+                    (344, 108, "Download v"),
+                ] {
+                    Rectangle::new(Point::new(bx, y - 6), Size::new(bw, 24))
+                        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                        .draw(display)?;
+                    Text::new(lbl, Point::new(bx + 6, y + 11), detail).draw(display)?;
+                }
+                y += 28;
+            }
+            Ao3ScrollLine::MetaBoxTop => {
+                Rectangle::new(Point::new(14, y), Size::new(452, 2))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                Rectangle::new(Point::new(12, y + 2), Size::new(2, 24))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                Rectangle::new(Point::new(464, y + 2), Size::new(2, 24))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                y += 14;
+            }
+            Ao3ScrollLine::MetaLabel(label, bold) => {
+                Rectangle::new(Point::new(12, y - 10), Size::new(2, 24))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                Rectangle::new(Point::new(464, y - 10), Size::new(2, 24))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                Text::new(label, Point::new(24, y), detail).draw(display)?;
+                if *bold {
+                    Text::new(label, Point::new(25, y), detail).draw(display)?;
+                }
+                y += 20;
+            }
+            Ao3ScrollLine::MetaValue(val, bold) => {
+                Rectangle::new(Point::new(12, y - 10), Size::new(2, 24))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                Rectangle::new(Point::new(464, y - 10), Size::new(2, 24))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                Text::new(val, Point::new(36, y), lucida_sm).draw(display)?;
+                if *bold {
+                    Text::new(val, Point::new(37, y), lucida_sm).draw(display)?;
+                }
+                let w = lucida_sm.text_width(val).max(20);
+                draw_dotted_underline(display, 36, y + 3, w)?;
+                y += 24;
+            }
+            Ao3ScrollLine::MetaStats(stats) => {
+                Rectangle::new(Point::new(12, y - 10), Size::new(2, 24))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                Rectangle::new(Point::new(464, y - 10), Size::new(2, 24))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                Text::new(stats, Point::new(24, y), detail).draw(display)?;
+                y += 26;
+            }
+            Ao3ScrollLine::MetaBoxBottom => {
+                Rectangle::new(Point::new(14, y), Size::new(452, 2))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                y += 20;
+            }
+            Ao3ScrollLine::Blank => {
+                y += 14;
+            }
+            Ao3ScrollLine::WorkTitle(t) => {
+                let w = georgia_xl.text_width(t);
+                let cx = ((480 - w) / 2).max(20);
+                Text::new(t, Point::new(cx, y + 10), georgia_xl).draw(display)?;
+                y += 36;
+            }
+            Ao3ScrollLine::WorkAuthor(author) => {
+                let w = georgia_md.text_width(author);
+                let cx = ((480 - w) / 2).max(20);
+                Text::new(author, Point::new(cx, y + 4), georgia_md).draw(display)?;
+                draw_dotted_underline(display, cx, y + 8, w)?;
+                y += 30;
+            }
+            Ao3ScrollLine::SectionHeader(hdr) => {
+                Text::new(hdr, Point::new(24, y + 6), georgia_lg).draw(display)?;
+                Rectangle::new(Point::new(24, y + 12), Size::new(432, 1))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                y += 30;
+            }
+            Ao3ScrollLine::IndentedProse(text) => {
+                Text::new(text, Point::new(36, y + 2), lucida_body).draw(display)?;
+                y += i32::from(lucida_body.line_height()) + 2;
+            }
+            Ao3ScrollLine::ChapterHeading(ch) => {
+                let w = georgia_lg.text_width(ch);
+                let cx = ((480 - w) / 2).max(24);
+                Text::new(ch, Point::new(cx, y + 6), georgia_lg).draw(display)?;
+                y += 32;
+            }
+            Ao3ScrollLine::BodyProse { text, .. } => {
+                let bounds = TextBounds::new(24, y - 20, 456, bottom_limit);
+                Text::new(text, Point::new(24, y + 2), lucida_body)
+                    .draw_clipped(display, bounds)?;
+                y += i32::from(lucida_body.line_height()) + 2;
+            }
+        }
+    }
+
+    // Scrollbar Track & Thumb on right edge
+    let track_top = 16;
+    let track_h = 724;
+    Rectangle::new(Point::new(472, track_top), Size::new(4, track_h as u32))
+        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+        .draw(display)?;
+    let thumb_h = ((FANFIC_VIEWPORT_LINES as i32 * track_h) / total_lines as i32).clamp(18, track_h);
+    let max_start = total_lines.saturating_sub(FANFIC_VIEWPORT_LINES).max(1) as i32;
+    let thumb_y = track_top + ((start as i32 * (track_h - thumb_h)) / max_start).clamp(0, track_h - thumb_h);
+    Rectangle::new(Point::new(472, thumb_y), Size::new(4, thumb_h as u32))
+        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+        .draw(display)?;
+
+    Rectangle::new(Point::new(14, 748), Size::new(452, 1))
+        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+        .draw(display)?;
+    let pct = ((start.saturating_add(FANFIC_VIEWPORT_LINES).min(total_lines) * 100) / total_lines).min(100);
+    Text::new(
+        &format!("UP/DOWN scroll ({pct}%)   SELECT options   BOOT back"),
+        Point::new(18, 782),
+        detail,
     )
     .draw(display)?;
     Ok(())
